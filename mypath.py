@@ -16,6 +16,10 @@ class Path(object):
             output_dir = '/Volumes/SID_1TB/VNN_data/hmdb51/hmdb51_pre/'
 
             return root_dir, output_dir
+        elif database == 'ucf10':
+            root_dir = '/Users/kisel/Downloads/ucf10'
+            output_dir = '/Users/kisel/Downloads/ucf10_pre'
+            return root_dir, output_dir
         else:
             print('Database {} not available.'.format(database))
             raise NotImplementedError

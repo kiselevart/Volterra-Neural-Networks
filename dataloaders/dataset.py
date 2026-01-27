@@ -21,7 +21,7 @@ class VideoDataset(Dataset):
             preprocess (bool): Determines whether to preprocess dataset. Default is False.
     """
 
-    def __init__(self, dataset='ucf101', split='train', clip_len=16, preprocess=False):
+    def __init__(self, dataset='ucf10', split='train', clip_len=16, preprocess=False):
         self.root_dir, self.output_dir = Path.db_dir(dataset)
 #         print('PATH: ', Path.db_dir(dataset))
         folder = os.path.join(self.output_dir, split)
@@ -116,10 +116,10 @@ class VideoDataset(Dataset):
 
     def preprocess(self):
         if not os.path.exists(self.output_dir):
-            os.mkdir(self.output_dir)
-            os.mkdir(os.path.join(self.output_dir, 'train'))
-            os.mkdir(os.path.join(self.output_dir, 'val'))
-            os.mkdir(os.path.join(self.output_dir, 'test'))
+            os.makedirs(self.output_dir, exist_ok=True)
+        
+        for split in ['train', 'val', 'test']:
+            os.makedirs(os.path.join(self.output_dir, split), exist_ok=True)
 
         # Split train/val/test sets
         for file in os.listdir(self.root_dir):
