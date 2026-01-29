@@ -1,0 +1,52 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environment
+venv/
+ENV/
+env/
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Large Binary Files (PyTorch ROCm wheels)
+*.whl
+
+# Datasets
+# Prevents large CIFAR data and archives from being committed
+Volterra-Neural-Networks/data/
+
+# Training Logs and Results
+# Ignores the Tensorboard/checkpoint directories generated during runs
+Volterra-Neural-Networks/runs/
+
+# Project Specific
+dirs.txt
+
+# Local IDE settings
+.vscode/
+.idea/
+
+# Python bytecode (covers subdirectories)
+**/__pycache__/
+*.pyc
+
+# Local Data and Archives
+# Prevents raw datasets and compressed archives from being tracked
+Volterra-Neural-Networks/data/
+
+# Training artifacts and checkpoints
+# This will ignore all the event logs, config.json, and .pth weights in 'runs'
+Volterra-Neural-Networks/runs/
+
+# Environment and dependency metadata
+# Often generated locally and should be managed via requirements.txt
+.python-version
