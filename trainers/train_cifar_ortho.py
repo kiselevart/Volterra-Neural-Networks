@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.optim as optim
 import torchvision
 import torchvision.transforms as transforms
-import torchvision.models as models
+from network.cifar_ortho.res_vnn_ortho import ResVNN_Ortho_CIFAR
 import time
 import argparse
 
@@ -11,8 +11,8 @@ from tqdm import tqdm
 
 def main():
     parser = argparse.ArgumentParser(description='Train Orthogonal Res-VNN on CIFAR-10')
-    parser.add_argument('--lr', default=0.1, type=float, help='learning rate') # Higher LR for ResNet style
-    parser.add_argument('--epochs', default=50, type=int, help='number of epochs') # Reduced from 200 for demo
+    parser.add_argument('--lr', default=0.1, type=float, help='learning rate') # Reduced for mixed precision stability
+    parser.add_argument('--epochs', default=250, type=int, help='number of epochs')
     parser.add_argument('--batch_size', default=128, type=int, help='batch size')
     args = parser.parse_args()
 
@@ -32,6 +32,7 @@ def main():
     transform_train = transforms.Compose([
         transforms.RandomCrop(32, padding=4),
         transforms.RandomHorizontalFlip(),
+        transforms.AutoAugment(transforms.AutoAugmentPolicy.CIFAR10),
         transforms.ToTensor(),
         transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
     ])
@@ -48,16 +49,9 @@ def main():
     testloader = torch.utils.data.DataLoader(testset, batch_size=100, shuffle=False, num_workers=2)
 
     # --- Model Setup ---
-    print('==> Building ResNet-18 (Baseline)...')
-    # Use standard ResNet18 but adapt for CIFAR-10 size
-    net = models.resnet18(pretrained=False)
-    # CIFAR-10 has 10 classes, not 1000
-    net.fc = nn.Linear(net.fc.in_features, 10)
-    # CIFAR-10 images are 32x32, so we need to modify the first layer to avoid downsampling too aggressively
-    net.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
-    # Remove maxpool to keep spatial dimensions larger for small images
-    net.maxpool = nn.Identity()
-    
+    print('==> Building Orthogonal Res-VNN...')
+    # Using [2, 2, 2, 2] blocks -> ResNet-18 equivalent depth
+    net = ResVNN_Ortho_CIFAR(num_classes=10, num_blocks=[2, 2, 2, 2], Q=3)
     net = net.to(device)
     
     criterion = nn.CrossEntropyLoss()

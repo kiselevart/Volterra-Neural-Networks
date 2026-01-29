@@ -17,7 +17,7 @@ def get_model(args, device):
             # Default to [2,2,2,2] blocks for ResNet18 equivalence
             net = ResVNN_Ortho_CIFAR(num_classes=args.num_classes, num_blocks=[2, 2, 2, 2], Q=args.Q)
         elif args.model == 'resnet18':
-            net = models.resnet18(pretrained=False)
+            net = models.resnet18(weights=None)
             net.fc = nn.Linear(net.fc.in_features, args.num_classes)
             # Adapt for CIFAR-10 size
             net.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)

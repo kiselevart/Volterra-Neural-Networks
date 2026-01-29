@@ -3,26 +3,26 @@ import torch.nn as nn
 import torch.optim as optim
 import torchvision
 import torchvision.transforms as transforms
-from network.cifar_ortho.res_vnn_ortho import ResVNN_Ortho_CIFAR
+from network.cifar_ortho.res_vnn_ortho_optimized import ResVNN_Ortho_CIFAR_Optimized
 import time
 import argparse
 
 from tqdm import tqdm
 
 def main():
-    parser = argparse.ArgumentParser(description='Train Orthogonal Res-VNN on CIFAR-10')
-    parser.add_argument('--lr', default=0.1, type=float, help='learning rate') # Higher LR for ResNet style
-    parser.add_argument('--epochs', default=50, type=int, help='number of epochs') # Reduced from 200 for demo
+    parser = argparse.ArgumentParser(description='Train Optimized Orthogonal Res-VNN on CIFAR-10 (AMD GPU)')
+    parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
+    parser.add_argument('--epochs', default=50, type=int, help='number of epochs')
     parser.add_argument('--batch_size', default=128, type=int, help='batch size')
     args = parser.parse_args()
 
     # --- Device Setup ---
-    if torch.backends.mps.is_available():
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+        print(f"Using Device: CUDA (GPU: {torch.cuda.get_device_name(0)})")
+    elif torch.backends.mps.is_available():
         device = torch.device("mps")
         print("Using Device: MPS (Mac GPU)")
-    elif torch.cuda.is_available():
-        device = torch.device("cuda")
-        print("Using Device: CUDA")
     else:
         device = torch.device("cpu")
         print("Using Device: CPU")
@@ -42,20 +42,26 @@ def main():
     ])
 
     trainset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform_train)
-    trainloader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size, shuffle=True, num_workers=2)
+    trainloader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size, shuffle=True, num_workers=8, pin_memory=True, persistent_workers=True)
 
     testset = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=transform_test)
-    testloader = torch.utils.data.DataLoader(testset, batch_size=100, shuffle=False, num_workers=2)
+    testloader = torch.utils.data.DataLoader(testset, batch_size=100, shuffle=False, num_workers=8, pin_memory=True, persistent_workers=True)
 
     # --- Model Setup ---
-    print('==> Building Orthogonal Res-VNN...')
-    # Using [2, 2, 2, 2] blocks -> ResNet-18 equivalent depth
-    net = ResVNN_Ortho_CIFAR(num_classes=10, num_blocks=[2, 2, 2, 2], Q=2)
+    print('==> Building Optimized Orthogonal Res-VNN...')
+    net = ResVNN_Ortho_CIFAR_Optimized(num_classes=10, num_blocks=[2, 2, 2, 2], Q=2)
+    
+    # Compile for additional AMD GPU optimization
+    print('==> Compiling model with torch.compile()...')
+    try:
+        net = torch.compile(net, backend='inductor', mode='reduce-overhead')
+    except Exception as e:
+        print(f"Warning: torch.compile failed ({e}), using uncompiled model")
+    
     net = net.to(device)
     
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
-    # Cosine Annealing to 0
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
 
     # --- Training Loop ---
@@ -81,13 +87,9 @@ def main():
             total += targets.size(0)
             correct += predicted.eq(targets).sum().item()
             
-            # Update pbar description with current metrics
             pbar.set_postfix({'Loss': f"{train_loss/(batch_idx+1):.3f}", 'Acc': f"{100.*correct/total:.2f}%"})
 
         epoch_time = time.time() - start_time
-        # print(f"Epoch {epoch+1}/{args.epochs} Summary | Time: {epoch_time:.1f}s | "
-        #       f"Loss: {train_loss/(len(trainloader)):.3f} | Acc: {100.*correct/total:.2f}%")
-        
         scheduler.step()
 
         # Validation every epoch
@@ -99,7 +101,6 @@ def test(net, testloader, device, criterion, epoch, total_epochs):
     correct = 0
     total = 0
     
-    # Testing Progress Bar
     pbar = tqdm(enumerate(testloader), total=len(testloader), desc=f"Epoch {epoch+1}/{total_epochs} [Test ]")
     with torch.no_grad():
         for batch_idx, (inputs, targets) in pbar:
