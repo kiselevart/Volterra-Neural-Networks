@@ -54,6 +54,7 @@ class VNN_ResBlock_Ortho(nn.Module):
         
         # Orthogonal Interaction: T2(x) = 4xy - 2
         interaction = 4.0 * (left * right) - 2.0
+        interaction = torch.clamp(interaction, min=-3.0, max=3.0)
         
         # Project and Scale
         quad_out = self.bn2_proj(self.conv2_proj(interaction))

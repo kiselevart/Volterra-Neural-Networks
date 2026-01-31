@@ -48,18 +48,35 @@ def get_dataloaders(args):
             transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
         ])
 
-        trainset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform_train)
+        full_trainset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform_train)
+        full_trainset_val = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform_test)
         testset = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=transform_test)
-        
+
+        val_split = getattr(args, 'val_split', 0.1)
+        if val_split <= 0 or val_split >= 1:
+            raise ValueError("val_split must be in (0, 1)")
+
+        val_size = int(len(full_trainset) * val_split)
+        train_size = len(full_trainset) - val_size
+
+        generator = torch.Generator()
+        generator.manual_seed(getattr(args, 'seed', 42))
+        indices = torch.randperm(len(full_trainset), generator=generator).tolist()
+        train_indices = indices[:train_size]
+        val_indices = indices[train_size:]
+
+        trainset = torch.utils.data.Subset(full_trainset, train_indices)
+        valset = torch.utils.data.Subset(full_trainset_val, val_indices)
+
         loaders['train'] = DataLoader(trainset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
-        loaders['val'] = DataLoader(testset, batch_size=100, shuffle=False, num_workers=args.num_workers)
+        loaders['val'] = DataLoader(valset, batch_size=100, shuffle=False, num_workers=args.num_workers)
         loaders['test'] = DataLoader(testset, batch_size=100, shuffle=False, num_workers=args.num_workers)
 
     elif args.task == 'video':
         # Dataset instantiation
-        train_ds = VideoDataset(dataset=args.dataset, split='train', clip_len=16, preprocess=False)
-        val_ds = VideoDataset(dataset=args.dataset, split='val', clip_len=16, preprocess=False)
-        test_ds = VideoDataset(dataset=args.dataset, split='test', clip_len=16, preprocess=False)
+        train_ds = VideoDataset(dataset=args.dataset, split='train', clip_len=16, preprocess=False, augment=True)
+        val_ds = VideoDataset(dataset=args.dataset, split='val', clip_len=16, preprocess=False, augment=False)
+        test_ds = VideoDataset(dataset=args.dataset, split='test', clip_len=16, preprocess=False, augment=False)
 
         if args.model == 'vnn_fusion':
             # Wrap for Flow

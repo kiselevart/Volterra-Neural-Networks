@@ -143,7 +143,7 @@ def train_model(dataset=dataset, save_dir=save_dir, num_classes=num_classes, lr=
             torch.save({
                 'epoch': epoch + 1,
                 'state_dict_rgb': model.state_dict(),
-                'opt_dict': optimizer.step(),
+                'opt_dict': optimizer.state_dict(),
             }, save_path)
             print(f"Save model at {save_path}\n")
 

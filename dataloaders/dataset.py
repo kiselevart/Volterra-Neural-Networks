@@ -21,12 +21,13 @@ class VideoDataset(Dataset):
             preprocess (bool): Determines whether to preprocess dataset. Default is False.
     """
 
-    def __init__(self, dataset='ucf10', split='train', clip_len=16, preprocess=False):
+    def __init__(self, dataset='ucf10', split='train', clip_len=16, preprocess=False, augment=True):
         self.root_dir, self.output_dir = Path.db_dir(dataset)
 #         print('PATH: ', Path.db_dir(dataset))
         folder = os.path.join(self.output_dir, split)
         self.clip_len = clip_len
         self.split = split
+        self.augment = augment
 
         # The following three parameters are chosen as described in the paper section 4.1
         self.resize_height = 128
@@ -76,11 +77,13 @@ class VideoDataset(Dataset):
     def __getitem__(self, index):
         # Loading and preprocessing.
         buffer = self.load_frames(self.fnames[index])
-        buffer = self.crop(buffer, self.clip_len, self.crop_size)
+        if self.augment:
+            buffer = self.crop(buffer, self.clip_len, self.crop_size)
+        else:
+            buffer = self.center_crop(buffer, self.clip_len, self.crop_size)
         labels = np.array(self.label_array[index])
 
-        if self.split == 'test':
-            # Perform data augmentation
+        if self.augment:
             buffer = self.randomflip(buffer)
         buffer = self.normalize(buffer)
         buffer = self.to_tensor(buffer)
@@ -234,6 +237,18 @@ class VideoDataset(Dataset):
         # Crop and jitter the video using indexing. The spatial crop is performed on
         # the entire array, so each frame is cropped in the same location. The temporal
         # jitter takes place via the selection of consecutive frames
+        buffer = buffer[time_index:time_index + clip_len,
+                 height_index:height_index + crop_size,
+                 width_index:width_index + crop_size, :]
+
+        return buffer
+
+    def center_crop(self, buffer, clip_len, crop_size):
+        # Center temporal clip
+        time_index = max(0, (buffer.shape[0] - clip_len) // 2)
+        height_index = max(0, (buffer.shape[1] - crop_size) // 2)
+        width_index = max(0, (buffer.shape[2] - crop_size) // 2)
+
         buffer = buffer[time_index:time_index + clip_len,
                  height_index:height_index + crop_size,
                  width_index:width_index + crop_size, :]
