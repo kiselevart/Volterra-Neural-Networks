@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-import torch.nn.utils.spectral_norm as spectral_norm
+from torch.nn.utils import spectral_norm
 
 class VNN_ResBlock_Ortho(nn.Module):
     def __init__(self, in_channels, out_channels, stride=1, Q=2):
@@ -32,7 +32,7 @@ class VNN_ResBlock_Ortho(nn.Module):
         
         # LayerScale / Gating factor to ease in the quadratic contribution
         self.poly_scale = nn.Parameter(torch.ones(1, out_channels, 1, 1) * 1e-3)
-        
+
         # Skip connection
         self.shortcut = nn.Sequential()
         if stride != 1 or in_channels != out_channels:
@@ -82,6 +82,8 @@ class ResVNN_Ortho_CIFAR(nn.Module):
         
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
         self.fc = nn.Linear(512, num_classes)
+
+        self.dropout = nn.Dropout(p=0.5)
         
         self._init_weights()
 
@@ -96,13 +98,20 @@ class ResVNN_Ortho_CIFAR(nn.Module):
     def _init_weights(self):
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                is_spectral = hasattr(m, 'weight_orig') or hasattr(m, 'parametrizations')
+                
+                if is_spectral:
+                    weight = getattr(m, 'weight_orig', None)
+                    if weight is None:
+                        weight = m.weight
+                    nn.init.orthogonal_(weight)
+                else:
+                    nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                    
             elif isinstance(m, nn.BatchNorm2d):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
-        
-        # Re-initialize the quadratic projection BN weights to zero
-        # This ensures the model behaves like a standard ResNet at start
+
         for m in self.modules():
             if isinstance(m, VNN_ResBlock_Ortho):
                 nn.init.constant_(m.bn2_proj.weight, 0)
@@ -118,6 +127,9 @@ class ResVNN_Ortho_CIFAR(nn.Module):
         
         x = self.avgpool(x)
         x = torch.flatten(x, 1)
+
+        x = self.dropout(x)
+
         x = self.fc(x)
         
         return x
