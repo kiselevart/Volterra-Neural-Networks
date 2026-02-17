@@ -66,6 +66,9 @@ class VNN(nn.Module):
         self.conv21_3 = nn.Conv3d(num_ch, 2 * Q1 * nch_out1_3, kernel_size=(3, 3, 3), padding=(1, 1, 1))
         self.conv21_1 = nn.Conv3d(num_ch, 2 * Q1 * nch_out1_1, kernel_size=(1, 1, 1), padding=(0, 0, 0))
         self.bn21 = nn.BatchNorm3d(sum_chans)
+        self.shortcut1 = nn.Conv3d(num_ch, sum_chans, kernel_size=(1, 1, 1), padding=(0, 0, 0), bias=False)
+        self.shortcut_bn1 = nn.BatchNorm3d(sum_chans)
+        self.scale1 = nn.Parameter(torch.zeros(1))
         self.pool1 = nn.MaxPool3d(kernel_size=(2, 2, 2), stride=(2, 2, 2))
 
         # ===== Block 2: Quadratic only =====
@@ -74,6 +77,9 @@ class VNN(nn.Module):
         self.bn12 = nn.BatchNorm3d(nch_out2)
         self.conv22 = nn.Conv3d(sum_chans, 2 * Q2 * nch_out2, kernel_size=(3, 3, 3), padding=(1, 1, 1))
         self.bn22 = nn.BatchNorm3d(nch_out2)
+        self.shortcut2 = nn.Conv3d(sum_chans, nch_out2, kernel_size=(1, 1, 1), padding=(0, 0, 0), bias=False)
+        self.shortcut_bn2 = nn.BatchNorm3d(nch_out2)
+        self.scale2 = nn.Parameter(torch.zeros(1))
         self.pool2 = nn.MaxPool3d(kernel_size=(2, 2, 2), stride=(2, 2, 2))
 
         # ===== Block 3: Quadratic only =====
@@ -82,6 +88,9 @@ class VNN(nn.Module):
         self.bn13 = nn.BatchNorm3d(nch_out3)
         self.conv23 = nn.Conv3d(nch_out2, 2 * Q3 * nch_out3, kernel_size=(3, 3, 3), padding=(1, 1, 1))
         self.bn23 = nn.BatchNorm3d(nch_out3)
+        self.shortcut3 = nn.Conv3d(nch_out2, nch_out3, kernel_size=(1, 1, 1), padding=(0, 0, 0), bias=False)
+        self.shortcut_bn3 = nn.BatchNorm3d(nch_out3)
+        self.scale3q = nn.Parameter(torch.zeros(1))
 
         # ===== Block 4: Quadratic only =====
         Q4 = 4; nch_out4 = 96
@@ -89,6 +98,9 @@ class VNN(nn.Module):
         self.bn14 = nn.BatchNorm3d(nch_out4)
         self.conv24 = nn.Conv3d(nch_out3, 2 * Q4 * nch_out4, kernel_size=(3, 3, 3), padding=(1, 1, 1))
         self.bn24 = nn.BatchNorm3d(nch_out4)
+        self.shortcut4 = nn.Conv3d(nch_out3, nch_out4, kernel_size=(1, 1, 1), padding=(0, 0, 0), bias=False)
+        self.shortcut_bn4 = nn.BatchNorm3d(nch_out4)
+        self.scale4q = nn.Parameter(torch.zeros(1))
 
         # ===== Block 6: Quadratic + Symmetric Cubic =====
         Q6 = 4; Q6c = 2; nch_out6 = 128
@@ -96,6 +108,9 @@ class VNN(nn.Module):
         self.bn16 = nn.BatchNorm3d(nch_out6)
         self.conv26 = nn.Conv3d(nch_out4, 2 * Q6 * nch_out6, kernel_size=(3, 3, 3), padding=(1, 1, 1))
         self.bn26 = nn.BatchNorm3d(nch_out6)
+        self.shortcut6 = nn.Conv3d(nch_out4, nch_out6, kernel_size=(1, 1, 1), padding=(0, 0, 0), bias=False)
+        self.shortcut_bn6 = nn.BatchNorm3d(nch_out6)
+        self.scale6q = nn.Parameter(torch.zeros(1))
         # Cubic (symmetric a²·b)
         self.conv36 = nn.Conv3d(nch_out4, 2 * Q6c * nch_out6, kernel_size=(3, 3, 3), padding=(1, 1, 1))
         self.bn36 = nn.BatchNorm3d(nch_out6)
@@ -108,6 +123,9 @@ class VNN(nn.Module):
         self.bn17 = nn.BatchNorm3d(nch_out7)
         self.conv27 = nn.Conv3d(nch_out6, 2 * Q7 * nch_out7, kernel_size=(3, 3, 3), padding=(1, 1, 1))
         self.bn27 = nn.BatchNorm3d(nch_out7)
+        self.shortcut7 = nn.Conv3d(nch_out6, nch_out7, kernel_size=(1, 1, 1), padding=(0, 0, 0), bias=False)
+        self.shortcut_bn7 = nn.BatchNorm3d(nch_out7)
+        self.scale7q = nn.Parameter(torch.zeros(1))
         # Cubic (symmetric a²·b)
         self.conv37 = nn.Conv3d(nch_out6, 2 * Q7c * nch_out7, kernel_size=(3, 3, 3), padding=(1, 1, 1))
         self.bn37 = nn.BatchNorm3d(nch_out7)
@@ -119,6 +137,9 @@ class VNN(nn.Module):
         self.bn15 = nn.BatchNorm3d(nch_out5)
         self.conv25 = nn.Conv3d(nch_out7, 2 * Q5 * nch_out5, kernel_size=(3, 3, 3), padding=(1, 1, 1))
         self.bn25 = nn.BatchNorm3d(nch_out5)
+        self.shortcut5 = nn.Conv3d(nch_out7, nch_out5, kernel_size=(1, 1, 1), padding=(0, 0, 0), bias=False)
+        self.shortcut_bn5 = nn.BatchNorm3d(nch_out5)
+        self.scale5q = nn.Parameter(torch.zeros(1))
         # Cubic (symmetric a²·b)
         self.conv35 = nn.Conv3d(nch_out7, 2 * Q5c * nch_out5, kernel_size=(3, 3, 3), padding=(1, 1, 1))
         self.bn35 = nn.BatchNorm3d(nch_out5)
@@ -140,40 +161,40 @@ class VNN(nn.Module):
         x21_3 = _volterra_quadratic(self.conv21_3(x), Q1, nch1)
         x21_1 = _volterra_quadratic(self.conv21_1(x), Q1, nch1)
         x21 = self.bn21(torch.cat((x21_5, x21_3, x21_1), 1))
-        x = self.pool1(x11 + x21)
+        x = self.pool1(self.shortcut_bn1(self.shortcut1(x)) + x11 + self.scale1 * x21)
 
         # ===== Block 2: Quadratic =====
         x12 = self.bn12(self.conv12(x))
         x22 = self.bn22(_volterra_quadratic(self.conv22(x), 4, 32))
-        x = self.pool2(x12 + x22)
+        x = self.pool2(self.shortcut_bn2(self.shortcut2(x)) + x12 + self.scale2 * x22)
 
         # ===== Block 3: Quadratic (no pool) =====
         x13 = self.bn13(self.conv13(x))
         x23 = self.bn23(_volterra_quadratic(self.conv23(x), 4, 64))
-        x = x13 + x23
+        x = self.shortcut_bn3(self.shortcut3(x)) + x13 + self.scale3q * x23
 
         # ===== Block 4: Quadratic (no pool) =====
         x14 = self.bn14(self.conv14(x))
         x24 = self.bn24(_volterra_quadratic(self.conv24(x), 4, 96))
-        x = x14 + x24
+        x = self.shortcut_bn4(self.shortcut4(x)) + x14 + self.scale4q * x24
 
         # ===== Block 6: Quadratic + Cubic =====
         x16 = self.bn16(self.conv16(x))
         x26 = self.bn26(_volterra_quadratic(self.conv26(x), 4, 128))
         x36 = self.bn36(_volterra_cubic_symmetric(self.conv36(x), 2, 128))
-        x = self.pool6(x16 + x26 + self.scale6 * x36)
+        x = self.pool6(self.shortcut_bn6(self.shortcut6(x)) + x16 + self.scale6q * x26 + self.scale6 * x36)
 
         # ===== Block 7: Quadratic + Cubic (no pool) =====
         x17 = self.bn17(self.conv17(x))
         x27 = self.bn27(_volterra_quadratic(self.conv27(x), 4, 256))
         x37 = self.bn37(_volterra_cubic_symmetric(self.conv37(x), 2, 256))
-        x = x17 + x27 + self.scale7 * x37
+        x = self.shortcut_bn7(self.shortcut7(x)) + x17 + self.scale7q * x27 + self.scale7 * x37
 
         # ===== Block 5: Quadratic + Cubic =====
         x15 = self.bn15(self.conv15(x))
         x25 = self.bn25(_volterra_quadratic(self.conv25(x), 2, 256))
         x35 = self.bn35(_volterra_cubic_symmetric(self.conv35(x), 2, 256))
-        x = self.pool5(x15 + x25 + self.scale5 * x35)
+        x = self.pool5(self.shortcut_bn5(self.shortcut5(x)) + x15 + self.scale5q * x25 + self.scale5 * x35)
 
         # ===== Classifier =====
         x = x.view(x.size(0), -1)

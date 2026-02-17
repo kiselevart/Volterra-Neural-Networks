@@ -3,6 +3,7 @@ import os
 import time
 import json
 import csv
+import platform
 import socket
 import contextlib
 import warnings
@@ -56,10 +57,10 @@ Supported Models:
     
     # Task & Model
     parser.add_argument('--task', type=str, required=True, choices=['cifar', 'video'], help='Task type')
-    parser.add_argument('--dataset', type=str, required=True, choices=['cifar10', 'ucf10', 'ucf101', 'hmdb51'], help='Dataset name')
+    parser.add_argument('--dataset', type=str, required=True, choices=['cifar10', 'ucf10', 'ucf101', 'hmdb51', 'ucf11'], help='Dataset name')
     parser.add_argument('--model', type=str, required=True, 
                         choices=['vnn_simple', 'vnn_ortho', 'resnet18', 'vnn_rgb', 'vnn_fusion',
-                                 'vnn_rgb_ho', 'vnn_fusion_ho', 'vnn_complex_ho'], 
+                                 'vnn_rgb_ho', 'vnn_fusion_ho', 'vnn_complex_ho', 'vnn_cubic_simple_toggle'], 
                         help='Model architecture (append _ho for higher-order cubic variants)')
     
     # Hyperparameters
@@ -69,6 +70,17 @@ Supported Models:
     parser.add_argument('--momentum', type=float, default=0.9, help='SGD Momentum')
     parser.add_argument('--weight_decay', type=float, default=5e-4, help='Weight decay')
     parser.add_argument('--Q', type=int, default=2, help='Volterra interaction factor (for VNNs)')
+    parser.add_argument('--disable_cubic', action='store_true',
+                        help='Disable cubic term for vnn_cubic_simple_toggle (quadratic-only ablation)')
+
+    # Experiment Tracking (Weights & Biases)
+    parser.add_argument('--wandb', action='store_true', help='Enable Weights & Biases tracking')
+    parser.add_argument('--wandb_project', type=str, default='volterra-neural-networks', help='W&B project name')
+    parser.add_argument('--wandb_entity', type=str, default=None, help='W&B entity/team (optional)')
+    parser.add_argument('--wandb_name', type=str, default=None, help='W&B run name (optional)')
+    parser.add_argument('--wandb_mode', type=str, default='online', choices=['online', 'offline', 'disabled'],
+                        help='W&B mode')
+    parser.add_argument('--wandb_tags', nargs='*', default=None, help='Optional W&B tags')
     
     # System
     parser.add_argument('--num_workers', type=int, default=0, help='DataLoader workers (0 for safe Mac usage)')
@@ -81,8 +93,8 @@ Supported Models:
     # Derived attributes
     if args.dataset == 'cifar10':
         args.num_classes = 10
-    elif args.dataset == 'ucf10':
-        args.num_classes = 10
+    elif args.dataset == 'ucf11':
+        args.num_classes = 11
     elif args.dataset == 'ucf101':
         args.num_classes = 101
     elif args.dataset == 'hmdb51':
@@ -95,6 +107,9 @@ class Trainer:
         self.args = args
         self.start_epoch = 0
         self.best_acc = 0.0
+        self.wandb = None
+        self.wandb_run = None
+        self.epoch_bench = []
         
         # 1. Device Setup
         if args.device == 'auto':
@@ -115,6 +130,35 @@ class Trainer:
         self.out_dir = os.path.join('runs', run_name)
         os.makedirs(self.out_dir, exist_ok=True)
         os.makedirs(os.path.join(self.out_dir, 'checkpoints'), exist_ok=True)
+
+        # 2.1 W&B (initialize early to fail fast before expensive dataset setup)
+        if args.wandb and args.wandb_mode != 'disabled':
+            try:
+                import wandb  # noqa: PLC0415
+            except ImportError as exc:
+                raise ImportError(
+                    "W&B is enabled but unavailable in the active uv environment. "
+                    "Use one of: `uv add wandb` (project dependency) or "
+                    "`uv run --with wandb python train.py ...`."
+                ) from exc
+
+            wandb_name = args.wandb_name if args.wandb_name else run_name
+            self.wandb = wandb
+            self.wandb_run = self.wandb.init(
+                project=args.wandb_project,
+                entity=args.wandb_entity,
+                name=wandb_name,
+                mode=args.wandb_mode,
+                tags=args.wandb_tags,
+                dir=self.out_dir,
+                reinit=True,
+                config={
+                    **vars(args),
+                    'device': str(self.device),
+                    'hostname': socket.gethostname(),
+                    'output_dir': self.out_dir,
+                },
+            )
         
         # TensorBoard
         self.writer = SummaryWriter(log_dir=os.path.join(self.out_dir, 'logs'))
@@ -132,6 +176,18 @@ class Trainer:
         # 3. Model & Data
         self.model = get_model(args, self.device)
         self.loaders = get_dataloaders(args)
+        self.total_params = sum(p.numel() for p in self.model.parameters())
+        self.trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+
+        if self.wandb is not None and self.wandb_run is not None:
+            self.wandb.config.update({
+                'total_params': self.total_params,
+                'trainable_params': self.trainable_params,
+            }, allow_val_change=True)
+            self.wandb.define_metric('epoch')
+            self.wandb.define_metric('train/*', step_metric='epoch')
+            self.wandb.define_metric('val/*', step_metric='epoch')
+            self.wandb.define_metric('bench/*', step_metric='epoch')
         
         # 4. Optimization
         # Handle specific optimizer needs (Video VNNs use Adam with specific groups, CIFAR uses SGD)
@@ -153,7 +209,7 @@ class Trainer:
             
         self.criterion = nn.CrossEntropyLoss().to(self.device)
         # Mixed precision with conservative loss scaling
-        self.amp_enabled = self.device.type in ('cuda', 'mps')
+        self.amp_enabled = self.device.type == 'cuda'
         self.autocast_device = self.device.type if self.amp_enabled else 'cpu'
         # GradScaler is only supported on CUDA
         self.scaler = GradScaler(device='cuda', init_scale=2**16, growth_interval=100) if self.device.type == 'cuda' else None
@@ -179,6 +235,11 @@ class Trainer:
             pass
         try:
             self.writer.close()
+        except Exception:
+            pass
+        try:
+            if self.wandb is not None:
+                self.wandb.finish()
         except Exception:
             pass
 
@@ -227,23 +288,32 @@ class Trainer:
         running_loss = 0.0
         correct = 0
         total = 0
+        valid_batches = 0
+        skipped_nonfinite = 0
+        step_times = []
+        epoch_start = time.time()
         
         pbar = tqdm(enumerate(self.loaders['train']), total=len(self.loaders['train']), 
                     desc=f"Epoch {epoch+1}/{self.args.epochs} [Train]")
         
         for batch_idx, (inputs, targets) in pbar:
+            step_start = time.time()
             # Handle Video Fusion Tuple (rgb, flow)
             if isinstance(inputs, list) and len(inputs) == 2:
                 inputs = [x.to(self.device) for x in inputs]
             else:
                 inputs = inputs.to(self.device)
-            targets = targets.to(self.device)
+            targets = targets.to(self.device, dtype=torch.long).view(-1)
             
             self.optimizer.zero_grad()
             if self.scaler:
                 with self._autocast():
                     outputs = self.model(inputs)
                     loss = self.criterion(outputs, targets)
+                if (not torch.isfinite(loss)) or (not torch.isfinite(outputs).all()):
+                    skipped_nonfinite += 1
+                    self.optimizer.zero_grad(set_to_none=True)
+                    continue
                 self.scaler.scale(loss).backward()
                 self.scaler.unscale_(self.optimizer)
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
@@ -253,58 +323,109 @@ class Trainer:
                 with self._autocast():
                     outputs = self.model(inputs)
                     loss = self.criterion(outputs, targets)
+                if (not torch.isfinite(loss)) or (not torch.isfinite(outputs).all()):
+                    skipped_nonfinite += 1
+                    self.optimizer.zero_grad(set_to_none=True)
+                    continue
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
                 self.optimizer.step()
             
             running_loss += loss.item()
+            valid_batches += 1
             _, predicted = outputs.max(1)
             total += targets.size(0)
             correct += predicted.eq(targets).sum().item()
+            step_times.append(time.time() - step_start)
             
-            pbar.set_postfix({'Loss': f"{running_loss/(batch_idx+1):.3f}", 'Acc': f"{100.*correct/total:.2f}%"})
+            display_loss = running_loss / max(valid_batches, 1)
+            display_acc = (100. * correct / total) if total > 0 else 0.0
+            pbar.set_postfix({'Loss': f"{display_loss:.3f}", 'Acc': f"{display_acc:.2f}%", 'SkipNF': skipped_nonfinite})
             
-        return running_loss / len(self.loaders['train']), 100. * correct / total
+        epoch_time = time.time() - epoch_start
+        samples_per_sec = total / epoch_time if epoch_time > 0 else 0.0
+        avg_step_time = sum(step_times) / len(step_times) if step_times else 0.0
+        if valid_batches == 0:
+            warnings.warn("All training batches were non-finite; returning zeroed metrics for this epoch.")
+        return {
+            'loss': (running_loss / valid_batches) if valid_batches > 0 else 0.0,
+            'acc': (100. * correct / total) if total > 0 else 0.0,
+            'samples': total,
+            'epoch_time': epoch_time,
+            'samples_per_sec': samples_per_sec,
+            'avg_step_time': avg_step_time,
+            'valid_batches': valid_batches,
+            'skipped_nonfinite': skipped_nonfinite,
+        }
 
     def validate(self, epoch):
         self.model.eval()
         running_loss = 0.0
         correct = 0
         total = 0
+        valid_batches = 0
+        skipped_nonfinite = 0
+        step_times = []
+        epoch_start = time.time()
         
         pbar = tqdm(enumerate(self.loaders['val']), total=len(self.loaders['val']), 
                     desc=f"Epoch {epoch+1}/{self.args.epochs} [Val  ]")
         
         with torch.no_grad():
             for batch_idx, (inputs, targets) in pbar:
+                step_start = time.time()
                 if isinstance(inputs, list) and len(inputs) == 2:
                     inputs = [x.to(self.device) for x in inputs]
                 else:
                     inputs = inputs.to(self.device)
-                targets = targets.to(self.device)
+                targets = targets.to(self.device, dtype=torch.long).view(-1)
                 
                 with self._autocast():
                     outputs = self.model(inputs)
                     loss = self.criterion(outputs, targets)
+                if (not torch.isfinite(loss)) or (not torch.isfinite(outputs).all()):
+                    skipped_nonfinite += 1
+                    continue
                 
                 running_loss += loss.item()
+                valid_batches += 1
                 _, predicted = outputs.max(1)
                 total += targets.size(0)
                 correct += predicted.eq(targets).sum().item()
+                step_times.append(time.time() - step_start)
                 
-                pbar.set_postfix({'Loss': f"{running_loss/(batch_idx+1):.3f}", 'Acc': f"{100.*correct/total:.2f}%"})
+                display_loss = running_loss / max(valid_batches, 1)
+                display_acc = (100. * correct / total) if total > 0 else 0.0
+                pbar.set_postfix({'Loss': f"{display_loss:.3f}", 'Acc': f"{display_acc:.2f}%", 'SkipNF': skipped_nonfinite})
                 
-        return running_loss / len(self.loaders['val']), 100. * correct / total
+        epoch_time = time.time() - epoch_start
+        samples_per_sec = total / epoch_time if epoch_time > 0 else 0.0
+        avg_step_time = sum(step_times) / len(step_times) if step_times else 0.0
+        if valid_batches == 0:
+            warnings.warn("All validation batches were non-finite; returning zeroed metrics for this epoch.")
+        return {
+            'loss': (running_loss / valid_batches) if valid_batches > 0 else 0.0,
+            'acc': (100. * correct / total) if total > 0 else 0.0,
+            'samples': total,
+            'epoch_time': epoch_time,
+            'samples_per_sec': samples_per_sec,
+            'avg_step_time': avg_step_time,
+            'valid_batches': valid_batches,
+            'skipped_nonfinite': skipped_nonfinite,
+        }
 
     def run(self):
         print(f"==> Starting training: {self.args.run_name}")
+        full_start = time.time()
         
         for epoch in range(self.start_epoch, self.args.epochs):
             start_time = time.time()
             
             # Train & Val
-            train_loss, train_acc = self.train_epoch(epoch)
-            val_loss, val_acc = self.validate(epoch)
+            train_stats = self.train_epoch(epoch)
+            val_stats = self.validate(epoch)
+            train_loss, train_acc = train_stats['loss'], train_stats['acc']
+            val_loss, val_acc = val_stats['loss'], val_stats['acc']
             self.scheduler.step()
             
             epoch_time = time.time() - start_time
@@ -317,6 +438,15 @@ class Trainer:
             lr_str = ", ".join([f"{lr:.6f}" for lr in current_lrs])
             print(f"    Summary | T_Loss: {train_loss:.4f} T_Acc: {train_acc:.2f}% | "
                 f"V_Loss: {val_loss:.4f} V_Acc: {val_acc:.2f}% | Time: {epoch_time:.1f}s | LR: [{lr_str}]{scaler_str}")
+            print(
+                f"    Bench   | T_SPS: {train_stats['samples_per_sec']:.2f} | V_SPS: {val_stats['samples_per_sec']:.2f} "
+                f"| T_step: {train_stats['avg_step_time']*1000:.1f}ms | V_step: {val_stats['avg_step_time']*1000:.1f}ms"
+            )
+            if train_stats.get('skipped_nonfinite', 0) > 0 or val_stats.get('skipped_nonfinite', 0) > 0:
+                print(
+                    f"    Stable  | Skipped non-finite batches -> "
+                    f"train: {train_stats.get('skipped_nonfinite', 0)}, val: {val_stats.get('skipped_nonfinite', 0)}"
+                )
             
             self.writer.add_scalar('Train/Loss', train_loss, epoch)
             self.writer.add_scalar('Train/Accuracy', train_acc, epoch)
@@ -326,8 +456,39 @@ class Trainer:
             if len(current_lrs) > 1:
                 for i, lr in enumerate(current_lrs):
                     self.writer.add_scalar(f'Info/LearningRate/group_{i}', lr, epoch)
+            self.writer.add_scalar('Bench/Train_SamplesPerSec', train_stats['samples_per_sec'], epoch)
+            self.writer.add_scalar('Bench/Val_SamplesPerSec', val_stats['samples_per_sec'], epoch)
+            self.writer.add_scalar('Bench/Train_AvgStepTimeMs', train_stats['avg_step_time'] * 1000.0, epoch)
+            self.writer.add_scalar('Bench/Val_AvgStepTimeMs', val_stats['avg_step_time'] * 1000.0, epoch)
+            self.writer.add_scalar('Bench/Train_SkippedNonFinite', train_stats.get('skipped_nonfinite', 0), epoch)
+            self.writer.add_scalar('Bench/Val_SkippedNonFinite', val_stats.get('skipped_nonfinite', 0), epoch)
 
             self._log_model_stats(epoch)
+
+            if self.wandb is not None:
+                self.wandb.log({
+                    'epoch': epoch + 1,
+                    'train/loss': train_loss,
+                    'train/acc': train_acc,
+                    'val/loss': val_loss,
+                    'val/acc': val_acc,
+                    'lr': current_lr,
+                    'epoch/time_sec': epoch_time,
+                    'bench/train_samples_per_sec': train_stats['samples_per_sec'],
+                    'bench/val_samples_per_sec': val_stats['samples_per_sec'],
+                    'bench/train_avg_step_ms': train_stats['avg_step_time'] * 1000.0,
+                    'bench/val_avg_step_ms': val_stats['avg_step_time'] * 1000.0,
+                    'amp/scale': scaler_val if scaler_val is not None else 0.0,
+                })
+
+            self.epoch_bench.append({
+                'epoch': epoch + 1,
+                'train_samples_per_sec': train_stats['samples_per_sec'],
+                'val_samples_per_sec': val_stats['samples_per_sec'],
+                'train_avg_step_ms': train_stats['avg_step_time'] * 1000.0,
+                'val_avg_step_ms': val_stats['avg_step_time'] * 1000.0,
+                'epoch_time_sec': epoch_time,
+            })
             
             self.csv_writer.writerow([epoch+1, train_loss, train_acc, val_loss, val_acc, epoch_time, current_lr])
             self.csv_file.flush()
@@ -351,6 +512,36 @@ class Trainer:
                 self.best_acc = val_acc
                 state['best_acc'] = val_acc
                 torch.save(state, os.path.join(self.out_dir, 'checkpoints', 'best_model.pth'))
+
+        total_runtime = time.time() - full_start
+        avg_train_sps = sum(x['train_samples_per_sec'] for x in self.epoch_bench) / len(self.epoch_bench) if self.epoch_bench else 0.0
+        avg_val_sps = sum(x['val_samples_per_sec'] for x in self.epoch_bench) / len(self.epoch_bench) if self.epoch_bench else 0.0
+        benchmark_summary = {
+            'best_val_acc': self.best_acc,
+            'epochs_ran': len(self.epoch_bench),
+            'total_runtime_sec': total_runtime,
+            'avg_train_samples_per_sec': avg_train_sps,
+            'avg_val_samples_per_sec': avg_val_sps,
+            'device': str(self.device),
+            'hostname': socket.gethostname(),
+            'platform': platform.platform(),
+            'total_params': self.total_params,
+            'trainable_params': self.trainable_params,
+            'epoch_benchmarks': self.epoch_bench,
+        }
+        with open(os.path.join(self.out_dir, 'benchmark_summary.json'), 'w') as f:
+            json.dump(benchmark_summary, f, indent=4)
+
+        if self.wandb is not None and self.wandb_run is not None:
+            self.wandb.save(os.path.join(self.out_dir, 'benchmark_summary.json'))
+
+        if self.wandb is not None:
+            self.wandb.summary['best_val_acc'] = self.best_acc
+            self.wandb.summary['total_runtime_sec'] = total_runtime
+            self.wandb.summary['avg_train_samples_per_sec'] = avg_train_sps
+            self.wandb.summary['avg_val_samples_per_sec'] = avg_val_sps
+            self.wandb.summary['total_params'] = self.total_params
+            self.wandb.summary['trainable_params'] = self.trainable_params
                 
         self.writer.close()
         self.csv_file.close()

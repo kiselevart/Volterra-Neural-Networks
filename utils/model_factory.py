@@ -3,10 +3,11 @@ import torch.nn as nn
 import torchvision.models as models
 
 # Imports from existing codebase
-from network.fusion import vnn_rgb_of_highQ, vnn_fusion_highQ
-from network.fusion_higher_order import vnn_rgb_of_highQ as vnn_rgb_ho
-from network.fusion_higher_order import vnn_rgb_of_complex as vnn_complex_ho
-from network.fusion_higher_order import vnn_fusion_highQ as vnn_fusion_ho
+from network.video import vnn_rgb_of_highQ, vnn_fusion_highQ
+from network.video_higher_order import vnn_rgb_of_highQ as vnn_rgb_ho
+from network.video_higher_order import vnn_rgb_of_complex as vnn_complex_ho
+from network.video_higher_order import vnn_fusion_highQ as vnn_fusion_ho
+from network.video_higher_order import vnn_cubic_simple_toggle as vnn_cubic_toggle
 from network.cifar.vnn_cifar import VNN_CIFAR
 from network.cifar_ortho.res_vnn_ortho import ResVNN_Ortho_CIFAR
 
@@ -108,6 +109,27 @@ def get_model(args, device):
         elif args.model == 'vnn_complex_ho':
             # Higher-order (cubic) deep 7-block complex backbone (includes classifier)
             net = vnn_complex_ho.VNN(num_classes=args.num_classes, num_ch=3)
+
+        elif args.model == 'vnn_cubic_simple_toggle':
+            # Simple 4-block Volterra backbone with optional cubic toggle + cubic fusion classifier
+            class VideoVNNCubicToggle(nn.Module):
+                def __init__(self, num_classes, use_cubic=True):
+                    super().__init__()
+                    self.backbone = vnn_cubic_toggle.SimpleVNN(use_cubic=use_cubic)
+                    self.head = vnn_fusion_ho.VNN_F(num_classes=num_classes, num_ch=96)
+
+                def forward(self, x):
+                    feats = self.backbone(x)
+                    return self.head(feats)
+
+                def get_1x_lr_params(self):
+                    p = []
+                    p += list(self.backbone.parameters())
+                    p += list(vnn_fusion_ho.get_1x_lr_params(self.head))
+                    p += list(vnn_fusion_ho.get_10x_lr_params(self.head))
+                    return p
+
+            net = VideoVNNCubicToggle(num_classes=args.num_classes, use_cubic=not args.disable_cubic)
 
         else:
              raise ValueError(f"Unknown Video model: {args.model}")

@@ -87,6 +87,7 @@ class VideoDataset(Dataset):
             buffer = self.crop(buffer, self.clip_len, self.crop_size)
         else:
             buffer = self.center_crop(buffer, self.clip_len, self.crop_size)
+        buffer = self.ensure_clip_len(buffer, self.clip_len)
         labels = np.array(self.label_array[index])
 
         if self.augment:
@@ -147,6 +148,33 @@ class VideoDataset(Dataset):
 
         print('Preprocessing finished.')
 
+    def _is_video_file(self, path):
+        return os.path.isfile(path) and path.lower().endswith(('.avi', '.mp4', '.mkv', '.mpg', '.mpeg', '.mov'))
+
+    def _collect_video_entries(self, class_dir):
+        """Collect supported videos in a class directory.
+
+        Supports:
+          1) Direct video files under class_dir
+          2) One-level nested folders containing video files (e.g., UCF11 groups)
+
+        Returns paths relative to class_dir suitable for joining later.
+        """
+        entries = []
+        for name in sorted(os.listdir(class_dir)):
+            full_path = os.path.join(class_dir, name)
+            if self._is_video_file(full_path):
+                entries.append(name)
+                continue
+
+            if os.path.isdir(full_path):
+                for nested in sorted(os.listdir(full_path)):
+                    nested_path = os.path.join(full_path, nested)
+                    if self._is_video_file(nested_path):
+                        entries.append(os.path.join(name, nested))
+
+        return entries
+
     def _preprocess_pre_split(self):
         """Preprocess when root_dir already has train/val/test/class/video.avi structure."""
         for split in ['train', 'val', 'test']:
@@ -159,9 +187,7 @@ class VideoDataset(Dataset):
                     continue
                 save_dir = os.path.join(self.output_dir, split, action_name)
                 os.makedirs(save_dir, exist_ok=True)
-                for video in sorted(os.listdir(action_dir)):
-                    if not video.endswith(('.avi', '.mp4', '.mkv')):
-                        continue
+                for video in self._collect_video_entries(action_dir):
                     self.process_video(video, os.path.join(split, action_name), save_dir)
 
     def _preprocess_flat(self):
@@ -170,7 +196,9 @@ class VideoDataset(Dataset):
         for file in os.listdir(self.root_dir):
             file_path = os.path.join(self.root_dir, file)
             if os.path.isdir(file_path):
-                video_files = [name for name in os.listdir(file_path)]
+                video_files = self._collect_video_entries(file_path)
+                if len(video_files) < 3:
+                    continue
 
                 train_and_valid, test = train_test_split(video_files, test_size=0.2, random_state=42)
                 train, val = train_test_split(train_and_valid, test_size=0.2, random_state=42)
@@ -202,11 +230,17 @@ class VideoDataset(Dataset):
             save_dir: Directory to save extracted frames
         """
         # Initialize a VideoCapture object to read video data into a numpy array
-        video_filename = video.split('.')[0]
-        if not os.path.exists(os.path.join(save_dir, video_filename)):
-            os.mkdir(os.path.join(save_dir, video_filename))
+        src_path = os.path.join(self.root_dir, action_name, video)
+        video_filename = os.path.splitext(os.path.basename(video))[0]
+        target_dir = os.path.join(save_dir, video_filename)
 
-        capture = cv2.VideoCapture(os.path.join(self.root_dir, action_name, video))
+        capture = cv2.VideoCapture(src_path)
+        if not capture.isOpened():
+            print(f"[WARN] Skipping unreadable video: {src_path}")
+            capture.release()
+            return
+
+        os.makedirs(target_dir, exist_ok=True)
 
         frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
         frame_width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -233,12 +267,18 @@ class VideoDataset(Dataset):
             if count % EXTRACT_FREQUENCY == 0:
                 if (frame_height != self.resize_height) or (frame_width != self.resize_width):
                     frame = cv2.resize(frame, (self.resize_width, self.resize_height))
-                cv2.imwrite(filename=os.path.join(save_dir, video_filename, '0000{}.jpg'.format(str(i))), img=frame)
+                cv2.imwrite(filename=os.path.join(target_dir, '0000{}.jpg'.format(str(i))), img=frame)
                 i += 1
             count += 1
 
         # Release the VideoCapture once it is no longer needed
         capture.release()
+
+        if i == 0 and os.path.isdir(target_dir):
+            try:
+                os.rmdir(target_dir)
+            except OSError:
+                pass
 
     def randomflip(self, buffer):
         """Horizontally flip the given image and ground truth randomly with a probability of 0.5."""
@@ -264,16 +304,40 @@ class VideoDataset(Dataset):
     def load_frames(self, file_dir):
         frames = sorted([os.path.join(file_dir, img) for img in os.listdir(file_dir)])
         frame_count = len(frames)
+        if frame_count == 0:
+            return np.empty((0, self.resize_height, self.resize_width, 3), np.dtype('float32'))
+
         buffer = np.empty((frame_count, self.resize_height, self.resize_width, 3), np.dtype('float32'))
         for i, frame_name in enumerate(frames):
-            frame = np.array(cv2.imread(frame_name)).astype(np.float64)
+            frame = cv2.imread(frame_name)
+            if frame is None:
+                frame = np.zeros((self.resize_height, self.resize_width, 3), dtype=np.float32)
+            else:
+                frame = np.array(frame).astype(np.float64)
             buffer[i] = frame
 
         return buffer
 
+    def ensure_clip_len(self, buffer, clip_len):
+        """Guarantee temporal length equals clip_len for batching safety."""
+        num_frames = buffer.shape[0]
+        if num_frames == clip_len:
+            return buffer
+
+        if num_frames == 0:
+            return np.zeros((clip_len, self.crop_size, self.crop_size, 3), dtype=np.float32)
+
+        if num_frames > clip_len:
+            return buffer[:clip_len]
+
+        pad_count = clip_len - num_frames
+        pad_frames = np.repeat(buffer[-1:, :, :, :], repeats=pad_count, axis=0)
+        return np.concatenate([buffer, pad_frames], axis=0)
+
     def crop(self, buffer, clip_len, crop_size):
         # randomly select time index for temporal jittering
-        time_index = np.random.randint(buffer.shape[0] - clip_len)
+        max_time = buffer.shape[0] - clip_len
+        time_index = np.random.randint(max_time + 1) if max_time > 0 else 0
 
         # Randomly select start indices in order to crop the video
         height_index = np.random.randint(buffer.shape[1] - crop_size)

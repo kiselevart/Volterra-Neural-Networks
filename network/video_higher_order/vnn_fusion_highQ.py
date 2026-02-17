@@ -55,6 +55,9 @@ class VNN_F(nn.Module):
         # Quadratic path
         self.conv21 = nn.Conv3d(num_ch, 2 * Q1 * nch_out1, kernel_size=(3, 3, 3), padding=(1, 1, 1))
         self.bn21 = nn.BatchNorm3d(nch_out1)
+        self.shortcut1 = nn.Conv3d(num_ch, nch_out1, kernel_size=(1, 1, 1), padding=(0, 0, 0), bias=False)
+        self.shortcut_bn1 = nn.BatchNorm3d(nch_out1)
+        self.scale_q1 = nn.Parameter(torch.zeros(1))
         # Cubic path (symmetric a²·b)
         self.conv31 = nn.Conv3d(num_ch, 2 * Q1c * nch_out1, kernel_size=(3, 3, 3), padding=(1, 1, 1))
         self.bn31 = nn.BatchNorm3d(nch_out1)
@@ -73,7 +76,7 @@ class VNN_F(nn.Module):
         x11 = self.bn11(self.conv11(x))
         x21 = self.bn21(_volterra_quadratic(self.conv21(x), Q=2, nch_out=256))
         x31 = self.bn31(_volterra_cubic_symmetric(self.conv31(x), Q=2, nch_out=256))
-        x = self.pool1(x11 + x21 + self.scale1 * x31)
+        x = self.pool1(self.shortcut_bn1(self.shortcut1(x)) + x11 + self.scale_q1 * x21 + self.scale1 * x31)
 
         # ===== Classifier =====
         x = x.view(x.size(0), -1)

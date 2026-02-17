@@ -14,9 +14,9 @@ class Path(object):
             root_dir = os.path.join(_BASE, 'hmdb51')
             output_dir = os.path.join(_BASE, 'hmdb51_pre')
             return root_dir, output_dir
-        elif database == 'ucf10':
-            root_dir = os.path.join(_BASE, 'ucf10')
-            output_dir = os.path.join(_BASE, 'ucf10_pre')
+        elif database == 'ucf11':
+            root_dir = os.path.join(_BASE, 'ucf11')
+            output_dir = os.path.join(_BASE, 'ucf11_pre')
             return root_dir, output_dir
         else:
             raise NotImplementedError(f'Database {database} not available.')
