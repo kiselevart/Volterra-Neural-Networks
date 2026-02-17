@@ -1,3 +1,14 @@
+"""DEPRECATED: This legacy trainer is superseded by the unified train.py script.
+Use instead:
+    python train.py --task cifar --dataset cifar10 --model resnet18
+"""
+import warnings
+warnings.warn(
+    "train_cifar_resnet.py is deprecated. Use 'python train.py --task cifar --dataset cifar10 --model resnet18' instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
 import torch
 import torch.nn as nn
 import torch.optim as optim

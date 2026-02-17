@@ -1,3 +1,5 @@
+import argparse
+import os
 import torch
 import numpy as np
 from network.fusion import vnn_rgb_of_highQ, vnn_fusion_highQ
@@ -47,17 +49,33 @@ def center_crop(frame):
 
 
 def main():
+    parser = argparse.ArgumentParser(description='VNN Fusion Inference on Video')
+    parser.add_argument('--checkpoint', type=str,
+                        default=os.environ.get('VNN_CHECKPOINT', None),
+                        help='Path to checkpoint .pth.tar file (or set VNN_CHECKPOINT env var)')
+    parser.add_argument('--video', type=str,
+                        default=os.environ.get('VNN_VIDEO', None),
+                        help='Path to input video file (or set VNN_VIDEO env var)')
+    parser.add_argument('--labels', type=str, default='./dataloaders/ucf_labels.txt',
+                        help='Path to class labels file')
+    parser.add_argument('--num_classes', type=int, default=101, help='Number of classes')
+    args = parser.parse_args()
+
+    if args.checkpoint is None:
+        parser.error('--checkpoint is required (or set VNN_CHECKPOINT env var)')
+    if args.video is None:
+        parser.error('--video is required (or set VNN_VIDEO env var)')
+
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print("Device being used:", device)
 
-    with open('./dataloaders/ucf_labels.txt', 'r') as f:
+    with open(args.labels, 'r') as f:
         class_names = f.readlines()
-        f.close()
     # init model
-    model_RGB = vnn_rgb_of_highQ.VNN(num_classes=101)
-    model_OF = vnn_rgb_of_highQ.VNN(num_classes=101, num_ch=2)
-    model_fuse = vnn_fusion_highQ.VNN_F(num_classes=101, num_ch=192)
-    checkpoint = torch.load('/Users/sid.roheda/Downloads/VNN_Code/models/VNN_Fusion-ucf101_epoch-99.pth.tar', map_location=lambda storage, loc: storage)
+    model_RGB = vnn_rgb_of_highQ.VNN(num_classes=args.num_classes)
+    model_OF = vnn_rgb_of_highQ.VNN(num_classes=args.num_classes, num_ch=2)
+    model_fuse = vnn_fusion_highQ.VNN_F(num_classes=args.num_classes, num_ch=192)
+    checkpoint = torch.load(args.checkpoint, map_location=lambda storage, loc: storage)
     model_RGB.load_state_dict(checkpoint['state_dict_rgb'])
     model_OF.load_state_dict(checkpoint['state_dict_of'])
     model_fuse.load_state_dict(checkpoint['state_dict_fuse'])
@@ -70,9 +88,7 @@ def main():
     model_fuse.eval()
 
     # read video
-    # video = '/Users/sid.roheda/Downloads/VNN_Code/UCF-101/IceDancing/v_IceDancing_g05_c01.avi'
-    video = '/Users/sid.roheda/Downloads/VNN_Code/UCF-101/TennisSwing/v_TennisSwing_g02_c06.avi'
-    cap = cv2.VideoCapture(video)
+    cap = cv2.VideoCapture(args.video)
     retaining = True
 
     clip = []

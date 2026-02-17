@@ -1,3 +1,14 @@
+"""DEPRECATED: This legacy trainer is superseded by the unified train.py script.
+Use instead:
+    python train.py --task video --dataset ucf101 --model vnn_fusion
+"""
+import warnings
+warnings.warn(
+    "train_VNN_fusion_refactored.py is deprecated. Use 'python train.py --task video --dataset ucf101 --model vnn_fusion' instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
 import os
 import sys
 import argparse

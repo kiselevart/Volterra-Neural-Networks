@@ -4,6 +4,9 @@ import torchvision.models as models
 
 # Imports from existing codebase
 from network.fusion import vnn_rgb_of_highQ, vnn_fusion_highQ
+from network.fusion_higher_order import vnn_rgb_of_highQ as vnn_rgb_ho
+from network.fusion_higher_order import vnn_rgb_of_complex as vnn_complex_ho
+from network.fusion_higher_order import vnn_fusion_highQ as vnn_fusion_ho
 from network.cifar.vnn_cifar import VNN_CIFAR
 from network.cifar_ortho.res_vnn_ortho import ResVNN_Ortho_CIFAR
 
@@ -71,6 +74,41 @@ def get_model(args, device):
                     return p
                     
             net = VideoVNNFusion(num_classes=args.num_classes)
+
+        elif args.model == 'vnn_rgb_ho':
+            # Higher-order (cubic) RGB backbone + cubic fusion head
+            class VideoVNN_HO(nn.Module):
+                def __init__(self, num_classes):
+                    super().__init__()
+                    self.backbone = vnn_rgb_ho.VNN(num_classes=num_classes, num_ch=3)
+                    self.head = vnn_fusion_ho.VNN_F(num_classes=num_classes, num_ch=96)
+
+                def forward(self, x):
+                    return self.head(self.backbone(x))
+
+            net = VideoVNN_HO(num_classes=args.num_classes)
+
+        elif args.model == 'vnn_fusion_ho':
+            # Higher-order (cubic) two-stream fusion: RGB + Flow
+            class VideoVNNFusion_HO(nn.Module):
+                def __init__(self, num_classes):
+                    super().__init__()
+                    self.model_rgb = vnn_rgb_ho.VNN(num_classes=num_classes, num_ch=3)
+                    self.model_of = vnn_rgb_ho.VNN(num_classes=num_classes, num_ch=2)
+                    self.model_fuse = vnn_fusion_ho.VNN_F(num_classes=num_classes, num_ch=192)
+
+                def forward(self, x):
+                    rgb, flow = x
+                    out_rgb = self.model_rgb(rgb)
+                    out_of = self.model_of(flow)
+                    return self.model_fuse(torch.cat((out_rgb, out_of), 1))
+
+            net = VideoVNNFusion_HO(num_classes=args.num_classes)
+
+        elif args.model == 'vnn_complex_ho':
+            # Higher-order (cubic) deep 7-block complex backbone (includes classifier)
+            net = vnn_complex_ho.VNN(num_classes=args.num_classes, num_ch=3)
+
         else:
              raise ValueError(f"Unknown Video model: {args.model}")
     

@@ -6,6 +6,7 @@ import csv
 import socket
 import contextlib
 import warnings
+import atexit
 from datetime import datetime
 from tqdm import tqdm
 
@@ -41,7 +42,10 @@ Supported Models:
   3. Train VNN Fusion on UCF101 (Video):
      python train.py --task video --dataset ucf101 --model vnn_fusion --num_workers 4 --batch_size 16
 
-  4. Resume from checkpoint:
+  4. Train VNN Fusion with 3rd-order cubic terms (higher-order):
+     python train.py --task video --dataset ucf101 --model vnn_fusion_ho --num_workers 4 --batch_size 8
+
+  5. Resume from checkpoint:
      python train.py --task cifar --dataset cifar10 --model vnn_ortho --resume runs/vnn_ortho_.../checkpoints/last.pth"""
 
     parser = argparse.ArgumentParser(
@@ -54,8 +58,9 @@ Supported Models:
     parser.add_argument('--task', type=str, required=True, choices=['cifar', 'video'], help='Task type')
     parser.add_argument('--dataset', type=str, required=True, choices=['cifar10', 'ucf10', 'ucf101', 'hmdb51'], help='Dataset name')
     parser.add_argument('--model', type=str, required=True, 
-                        choices=['vnn_simple', 'vnn_ortho', 'resnet18', 'vnn_rgb', 'vnn_fusion'], 
-                        help='Model architecture')
+                        choices=['vnn_simple', 'vnn_ortho', 'resnet18', 'vnn_rgb', 'vnn_fusion',
+                                 'vnn_rgb_ho', 'vnn_fusion_ho', 'vnn_complex_ho'], 
+                        help='Model architecture (append _ho for higher-order cubic variants)')
     
     # Hyperparameters
     parser.add_argument('--epochs', type=int, default=50, help='Number of epochs')
@@ -118,6 +123,7 @@ class Trainer:
         self.csv_file = open(os.path.join(self.out_dir, 'metrics.csv'), 'w', newline='')
         self.csv_writer = csv.writer(self.csv_file)
         self.csv_writer.writerow(['epoch', 'train_loss', 'train_acc', 'val_loss', 'val_acc', 'time', 'lr'])
+        atexit.register(self._cleanup)
         
         # Save Config
         with open(os.path.join(self.out_dir, 'config.json'), 'w') as f:
@@ -147,9 +153,10 @@ class Trainer:
             
         self.criterion = nn.CrossEntropyLoss().to(self.device)
         # Mixed precision with conservative loss scaling
-        self.amp_enabled = self.device.type == 'cuda'
-        self.autocast_device = 'cuda' if self.amp_enabled else 'cpu'
-        self.scaler = GradScaler(device='cuda', init_scale=2**16, growth_interval=100) if self.amp_enabled else None
+        self.amp_enabled = self.device.type in ('cuda', 'mps')
+        self.autocast_device = self.device.type if self.amp_enabled else 'cpu'
+        # GradScaler is only supported on CUDA
+        self.scaler = GradScaler(device='cuda', init_scale=2**16, growth_interval=100) if self.device.type == 'cuda' else None
 
         # 5. Resume
         if args.resume:
@@ -161,6 +168,19 @@ class Trainer:
                 self.model.load_state_dict(checkpoint['state_dict'])
                 self.optimizer.load_state_dict(checkpoint['optimizer'])
                 print(f"==> Resuming from epoch {self.start_epoch}")
+
+    def _cleanup(self):
+        """Ensure CSV and TensorBoard are flushed/closed on exit or crash."""
+        try:
+            if self.csv_file and not self.csv_file.closed:
+                self.csv_file.flush()
+                self.csv_file.close()
+        except Exception:
+            pass
+        try:
+            self.writer.close()
+        except Exception:
+            pass
 
     def _get_lr(self):
         return [group['lr'] for group in self.optimizer.param_groups]
@@ -214,25 +234,10 @@ class Trainer:
         for batch_idx, (inputs, targets) in pbar:
             # Handle Video Fusion Tuple (rgb, flow)
             if isinstance(inputs, list) and len(inputs) == 2:
-                # inputs is [rgb, flow]
                 inputs = [x.to(self.device) for x in inputs]
-                targets = targets.to(self.device)
-                if self.scaler:
-                    with self._autocast():
-                        outputs = self.model(inputs)
-                        loss = self.criterion(outputs, targets)
-                else:
-                    outputs = self.model(inputs)
-                    loss = self.criterion(outputs, targets)
             else:
-                inputs, targets = inputs.to(self.device), targets.to(self.device)
-                if self.scaler:
-                    with self._autocast():
-                        outputs = self.model(inputs)
-                        loss = self.criterion(outputs, targets)
-                else:
-                    outputs = self.model(inputs)
-                    loss = self.criterion(outputs, targets)
+                inputs = inputs.to(self.device)
+            targets = targets.to(self.device)
             
             self.optimizer.zero_grad()
             if self.scaler:
@@ -240,15 +245,16 @@ class Trainer:
                     outputs = self.model(inputs)
                     loss = self.criterion(outputs, targets)
                 self.scaler.scale(loss).backward()
-                self.scaler.unscale_(self.optimizer) # Necessary before clipping
+                self.scaler.unscale_(self.optimizer)
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
             else:
-                outputs = self.model(inputs)
-                loss = self.criterion(outputs, targets)
+                with self._autocast():
+                    outputs = self.model(inputs)
+                    loss = self.criterion(outputs, targets)
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0) # Ensure this is here too
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
                 self.optimizer.step()
             
             running_loss += loss.item()
@@ -273,24 +279,12 @@ class Trainer:
             for batch_idx, (inputs, targets) in pbar:
                 if isinstance(inputs, list) and len(inputs) == 2:
                     inputs = [x.to(self.device) for x in inputs]
-                    targets = targets.to(self.device)
-                    if self.scaler:
-                        with self._autocast():
-                            outputs = self.model(inputs)
-                    else:
-                        outputs = self.model(inputs)
                 else:
-                    inputs, targets = inputs.to(self.device), targets.to(self.device)
-                    if self.scaler:
-                        with self._autocast():
-                            outputs = self.model(inputs)
-                    else:
-                        outputs = self.model(inputs)
+                    inputs = inputs.to(self.device)
+                targets = targets.to(self.device)
                 
-                if self.scaler:
-                    with self._autocast():
-                        loss = self.criterion(outputs, targets)
-                else:
+                with self._autocast():
+                    outputs = self.model(inputs)
                     loss = self.criterion(outputs, targets)
                 
                 running_loss += loss.item()

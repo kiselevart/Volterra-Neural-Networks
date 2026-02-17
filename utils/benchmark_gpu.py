@@ -5,11 +5,24 @@ import torch
 import torch.nn as nn
 import time
 
-device = torch.device("cuda")
+# Auto-detect device
+if torch.cuda.is_available():
+    device = torch.device("cuda")
+elif torch.backends.mps.is_available():
+    device = torch.device("mps")
+else:
+    device = torch.device("cpu")
+
+def sync_device():
+    """Synchronize the current device for accurate timing."""
+    if device.type == 'cuda':
+        torch.cuda.synchronize()
+    elif device.type == 'mps':
+        torch.mps.synchronize()
 
 # Test 1: Simple forward pass
 print("=" * 60)
-print("GPU Performance Benchmark")
+print(f"GPU Performance Benchmark (device: {device})")
 print("=" * 60)
 
 # Warm up
@@ -19,7 +32,7 @@ for _ in range(5):
 
 # ResNet-like model
 from torchvision import models
-net = models.resnet18(pretrained=False)
+net = models.resnet18(weights=None)
 net.fc = nn.Linear(net.fc.in_features, 10)
 net.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
 net.maxpool = nn.Identity()
@@ -28,13 +41,13 @@ net.eval()
 
 # Benchmark forward pass
 print("\n1. Forward Pass (128 batch, 10 iterations):")
-torch.cuda.synchronize()
+sync_device()
 start = time.time()
 for _ in range(10):
     x = torch.randn(128, 3, 32, 32, device=device)
     with torch.no_grad():
         _ = net(x)
-torch.cuda.synchronize()
+sync_device()
 elapsed = time.time() - start
 print(f"   Time: {elapsed:.3f}s ({10/elapsed:.1f} batches/sec)")
 
@@ -44,7 +57,7 @@ net.train()
 optimizer = torch.optim.SGD(net.parameters(), lr=0.1)
 criterion = nn.CrossEntropyLoss()
 
-torch.cuda.synchronize()
+sync_device()
 start = time.time()
 for _ in range(10):
     x = torch.randn(128, 3, 32, 32, device=device)
@@ -54,13 +67,13 @@ for _ in range(10):
     loss = criterion(outputs, y)
     loss.backward()
     optimizer.step()
-torch.cuda.synchronize()
+sync_device()
 elapsed = time.time() - start
 print(f"   Time: {elapsed:.3f}s ({10/elapsed:.1f} batches/sec)")
 
 # Benchmark with CPU sync (like in your code)
 print("\n3. Forward + Backward + CPU Sync (like your code):")
-torch.cuda.synchronize()
+sync_device()
 start = time.time()
 for _ in range(10):
     x = torch.randn(128, 3, 32, 32, device=device)
@@ -76,7 +89,7 @@ for _ in range(10):
     _, predicted = outputs.max(1)
     _ = predicted.eq(y).sum().item()
     
-torch.cuda.synchronize()
+sync_device()
 elapsed = time.time() - start
 print(f"   Time: {elapsed:.3f}s ({10/elapsed:.1f} batches/sec)")
 

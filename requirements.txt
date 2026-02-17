@@ -1,1 +1,8 @@
-pip @ file:///build/pip-25.3-py3-none-any.whl
+torch>=2.0.0
+torchvision>=0.15.0
+numpy>=1.24.0
+opencv-python>=4.7.0
+scikit-learn>=1.2.0
+joblib>=1.2.0
+tqdm>=4.65.0
+tensorboard>=2.12.0

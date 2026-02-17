@@ -21,9 +21,8 @@ class VideoDataset(Dataset):
             preprocess (bool): Determines whether to preprocess dataset. Default is False.
     """
 
-    def __init__(self, dataset='ucf10', split='train', clip_len=16, preprocess=False, augment=True):
+    def __init__(self, dataset='ucf101', split='train', clip_len=16, preprocess=False, augment=True):
         self.root_dir, self.output_dir = Path.db_dir(dataset)
-#         print('PATH: ', Path.db_dir(dataset))
         folder = os.path.join(self.output_dir, split)
         self.clip_len = clip_len
         self.split = split
@@ -34,8 +33,15 @@ class VideoDataset(Dataset):
         self.resize_width = 171
         self.crop_size = 112
 
+        # Detect whether root_dir has pre-split structure (train/val/test subdirs)
+        # or flat class folders that need splitting
+        self.pre_split = all(
+            os.path.isdir(os.path.join(self.root_dir, s))
+            for s in ('train', 'val', 'test')
+        )
+
         if not self.check_integrity():
-            raise RuntimeError('Dataset not found or corrupted.' +
+            raise RuntimeError('Dataset not found or corrupted.'
                                ' You need to download it from official website.')
 
         if (not self.check_preprocess()) or preprocess:
@@ -96,18 +102,26 @@ class VideoDataset(Dataset):
             return True
 
     def check_preprocess(self):
-        # TODO: Check image size in output_dir
+        """Check if preprocessed frames exist with correct dimensions."""
         if not os.path.exists(self.output_dir):
             return False
-        elif not os.path.exists(os.path.join(self.output_dir, 'train')):
+        train_dir = os.path.join(self.output_dir, 'train')
+        if not os.path.exists(train_dir):
             return False
 
-        for ii, video_class in enumerate(os.listdir(os.path.join(self.output_dir, 'train'))):
-            for video in os.listdir(os.path.join(self.output_dir, 'train', video_class)):
-                video_name = os.path.join(os.path.join(self.output_dir, 'train', video_class, video),
-                                    sorted(os.listdir(os.path.join(self.output_dir, 'train', video_class, video)))[0])
-                image = cv2.imread(video_name)
-                if np.shape(image)[0] != 128 or np.shape(image)[1] != 171:
+        for ii, video_class in enumerate(os.listdir(train_dir)):
+            class_dir = os.path.join(train_dir, video_class)
+            if not os.path.isdir(class_dir):
+                continue
+            for video in os.listdir(class_dir):
+                video_dir = os.path.join(class_dir, video)
+                if not os.path.isdir(video_dir):
+                    continue
+                frames = sorted(os.listdir(video_dir))
+                if not frames:
+                    return False
+                image = cv2.imread(os.path.join(video_dir, frames[0]))
+                if image is None or image.shape[0] != 128 or image.shape[1] != 171:
                     return False
                 else:
                     break
@@ -124,6 +138,34 @@ class VideoDataset(Dataset):
         for split in ['train', 'val', 'test']:
             os.makedirs(os.path.join(self.output_dir, split), exist_ok=True)
 
+        if self.pre_split:
+            # Data already split into train/val/test with class subfolders of videos
+            self._preprocess_pre_split()
+        else:
+            # Flat class folders — split ourselves
+            self._preprocess_flat()
+
+        print('Preprocessing finished.')
+
+    def _preprocess_pre_split(self):
+        """Preprocess when root_dir already has train/val/test/class/video.avi structure."""
+        for split in ['train', 'val', 'test']:
+            split_src = os.path.join(self.root_dir, split)
+            if not os.path.isdir(split_src):
+                continue
+            for action_name in sorted(os.listdir(split_src)):
+                action_dir = os.path.join(split_src, action_name)
+                if not os.path.isdir(action_dir):
+                    continue
+                save_dir = os.path.join(self.output_dir, split, action_name)
+                os.makedirs(save_dir, exist_ok=True)
+                for video in sorted(os.listdir(action_dir)):
+                    if not video.endswith(('.avi', '.mp4', '.mkv')):
+                        continue
+                    self.process_video(video, os.path.join(split, action_name), save_dir)
+
+    def _preprocess_flat(self):
+        """Preprocess when root_dir has flat class folders (original UCF101 layout)."""
         # Split train/val/test sets
         for file in os.listdir(self.root_dir):
             file_path = os.path.join(self.root_dir, file)
@@ -137,12 +179,9 @@ class VideoDataset(Dataset):
                 val_dir = os.path.join(self.output_dir, 'val', file)
                 test_dir = os.path.join(self.output_dir, 'test', file)
 
-                if not os.path.exists(train_dir):
-                    os.mkdir(train_dir)
-                if not os.path.exists(val_dir):
-                    os.mkdir(val_dir)
-                if not os.path.exists(test_dir):
-                    os.mkdir(test_dir)
+                os.makedirs(train_dir, exist_ok=True)
+                os.makedirs(val_dir, exist_ok=True)
+                os.makedirs(test_dir, exist_ok=True)
 
                 for video in train:
                     self.process_video(video, file, train_dir)
@@ -153,9 +192,15 @@ class VideoDataset(Dataset):
                 for video in test:
                     self.process_video(video, file, test_dir)
 
-        print('Preprocessing finished.')
-
     def process_video(self, video, action_name, save_dir):
+        """Extract and resize frames from a video file.
+        
+        Args:
+            video: Video filename (e.g. 'v_Apply_g01_c01.avi')
+            action_name: Relative path from root_dir to the folder containing the video
+                         (e.g. 'ApplyEyeMakeup' or 'train/ApplyEyeMakeup')
+            save_dir: Directory to save extracted frames
+        """
         # Initialize a VideoCapture object to read video data into a numpy array
         video_filename = video.split('.')[0]
         if not os.path.exists(os.path.join(save_dir, video_filename)):

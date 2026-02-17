@@ -1,29 +1,26 @@
+import os
+
+_BASE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
+
+
 class Path(object):
     @staticmethod
     def db_dir(database):
         if database == 'ucf101':
-            # folder that contains class labels
-            root_dir = '/Users/sid.roheda/Downloads/VNN_Code/UCF-101/'
-
-            # Save preprocess data into output_dir
-            output_dir = '/Users/sid.roheda/Downloads/VNN_Code/UCF-101/ucf101_pre/'
-
+            root_dir = os.path.join(_BASE, 'ucf101')
+            output_dir = os.path.join(_BASE, 'ucf101_pre')
             return root_dir, output_dir
         elif database == 'hmdb51':
-            # folder that contains class labels
-            root_dir = '/Volumes/SID_1TB/VNN_data/hmdb51/'
-
-            output_dir = '/Volumes/SID_1TB/VNN_data/hmdb51/hmdb51_pre/'
-
+            root_dir = os.path.join(_BASE, 'hmdb51')
+            output_dir = os.path.join(_BASE, 'hmdb51_pre')
             return root_dir, output_dir
         elif database == 'ucf10':
-            root_dir = '/Users/kisel/Downloads/ucf10'
-            output_dir = '/Users/kisel/Downloads/ucf10_pre'
+            root_dir = os.path.join(_BASE, 'ucf10')
+            output_dir = os.path.join(_BASE, 'ucf10_pre')
             return root_dir, output_dir
         else:
-            print('Database {} not available.'.format(database))
-            raise NotImplementedError
+            raise NotImplementedError(f'Database {database} not available.')
 
     @staticmethod
     def model_dir():
-        return '/home/sroheda/4Dim_VN/pytorch-video-recognition/dataloaders/UCF101/c3d-pretrained.pth'
+        return os.path.join(_BASE, 'pretrained', 'c3d-pretrained.pth')

@@ -1,3 +1,14 @@
+"""DEPRECATED: This legacy trainer is superseded by the unified train.py script.
+Use instead:
+    python train.py --task cifar --dataset cifar10 --model vnn_ortho
+"""
+import warnings
+warnings.warn(
+    "train_cifar_ortho_optimized.py is deprecated. Use 'python train.py --task cifar --dataset cifar10 --model vnn_ortho' instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
 import torch
 import torch.nn as nn
 import torch.optim as optim

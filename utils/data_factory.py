@@ -78,7 +78,7 @@ def get_dataloaders(args):
         val_ds = VideoDataset(dataset=args.dataset, split='val', clip_len=16, preprocess=False, augment=False)
         test_ds = VideoDataset(dataset=args.dataset, split='test', clip_len=16, preprocess=False, augment=False)
 
-        if args.model == 'vnn_fusion':
+        if args.model in ('vnn_fusion', 'vnn_fusion_ho'):
             # Wrap for Flow
             train_ds = FlowDatasetWrapper(train_ds)
             val_ds = FlowDatasetWrapper(val_ds)

@@ -50,3 +50,7 @@ Volterra-Neural-Networks/runs/
 # Environment and dependency metadata
 # Often generated locally and should be managed via requirements.txt
 .python-version
+
+data/
+
+runs/
