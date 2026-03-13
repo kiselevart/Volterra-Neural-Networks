@@ -1,13 +1,12 @@
 import argparse
 import os
 import time
-import json
-import csv
 import platform
 import socket
 import contextlib
 import warnings
 import atexit
+from typing import Any
 from datetime import datetime
 from tqdm import tqdm
 
@@ -15,7 +14,6 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.amp import autocast, GradScaler
-from torch.utils.tensorboard import SummaryWriter
 
 from utils.model_factory import get_model
 from utils.data_factory import get_dataloaders
@@ -73,13 +71,14 @@ Supported Models:
     parser.add_argument('--disable_cubic', action='store_true',
                         help='Disable cubic term for vnn_cubic_simple_toggle (quadratic-only ablation)')
 
-    # Experiment Tracking (Weights & Biases)
-    parser.add_argument('--wandb', action='store_true', help='Enable Weights & Biases tracking')
-    parser.add_argument('--wandb_project', type=str, default='volterra-neural-networks', help='W&B project name')
-    parser.add_argument('--wandb_entity', type=str, default=None, help='W&B entity/team (optional)')
-    parser.add_argument('--wandb_name', type=str, default=None, help='W&B run name (optional)')
-    parser.add_argument('--wandb_mode', type=str, default='online', choices=['online', 'offline', 'disabled'],
+    # Experiment Tracking (Weights & Biases) - enabled by default
+    parser.add_argument('--wandb_project', type=str, default=os.getenv('WANDB_PROJECT', 'vnn-research'), help='W&B project name')
+    parser.add_argument('--wandb_entity', type=str, default=os.getenv('WANDB_ENTITY'), help='W&B entity/team (optional)')
+    parser.add_argument('--wandb_name', type=str, default=None, help='W&B run name (optional; defaults to auto run_name)')
+    parser.add_argument('--wandb_mode', type=str, default='online', choices=['online', 'offline'],
                         help='W&B mode')
+    parser.add_argument('--wandb_on_fail', type=str, default='abort', choices=['abort', 'offline'],
+                        help='Behavior when W&B init fails: abort training or continue in offline mode')
     parser.add_argument('--wandb_tags', nargs='*', default=None, help='Optional W&B tags')
     
     # System
@@ -107,9 +106,10 @@ class Trainer:
         self.args = args
         self.start_epoch = 0
         self.best_acc = 0.0
-        self.wandb = None
-        self.wandb_run = None
+        self.wandb: Any = None
+        self.wandb_run: Any = None
         self.epoch_bench = []
+        self.run_name = None
         
         # 1. Device Setup
         if args.device == 'auto':
@@ -127,74 +127,80 @@ class Trainer:
         # 2. Directories & Logging
         timestamp = datetime.now().strftime('%b%d_%H-%M-%S')
         run_name = args.run_name if args.run_name else f"{args.model}_{args.dataset}_{timestamp}"
+        self.run_name = run_name
         self.out_dir = os.path.join('runs', run_name)
         os.makedirs(self.out_dir, exist_ok=True)
         os.makedirs(os.path.join(self.out_dir, 'checkpoints'), exist_ok=True)
 
         # 2.1 W&B (initialize early to fail fast before expensive dataset setup)
-        if args.wandb and args.wandb_mode != 'disabled':
-            try:
-                import wandb  # noqa: PLC0415
-            except ImportError as exc:
-                raise ImportError(
-                    "W&B is enabled but unavailable in the active uv environment. "
-                    "Use one of: `uv add wandb` (project dependency) or "
-                    "`uv run --with wandb python train.py ...`."
+        try:
+            import wandb  # noqa: PLC0415
+        except ImportError as exc:
+            raise ImportError(
+                "W&B is required for this training script. "
+                "Install it with: `uv add wandb` or `pip install wandb`."
+            ) from exc
+
+        wandb_name = args.wandb_name if args.wandb_name else run_name
+        self.wandb = wandb
+        init_kwargs = {
+            'project': args.wandb_project,
+            'entity': args.wandb_entity,
+            'name': wandb_name,
+            'mode': args.wandb_mode,
+            'tags': args.wandb_tags,
+            'dir': self.out_dir,
+            'reinit': True,
+            'config': {
+                **vars(args),
+                'device': str(self.device),
+                'hostname': socket.gethostname(),
+                'output_dir': self.out_dir,
+            },
+        }
+
+        try:
+            self.wandb_run = self.wandb.init(**init_kwargs)
+        except Exception as exc:
+            if args.wandb_on_fail == 'offline' and args.wandb_mode != 'offline':
+                warnings.warn(
+                    f"W&B init failed in online mode ({exc}). Falling back to offline mode.",
+                    RuntimeWarning,
+                )
+                init_kwargs['mode'] = 'offline'
+                self.wandb_run = self.wandb.init(**init_kwargs)
+            else:
+                raise RuntimeError(
+                    "W&B initialization failed. "
+                    "Login with `wandb login`, verify network access, or set --wandb_on_fail offline."
                 ) from exc
 
-            wandb_name = args.wandb_name if args.wandb_name else run_name
-            self.wandb = wandb
-            self.wandb_run = self.wandb.init(
-                project=args.wandb_project,
-                entity=args.wandb_entity,
-                name=wandb_name,
-                mode=args.wandb_mode,
-                tags=args.wandb_tags,
-                dir=self.out_dir,
-                reinit=True,
-                config={
-                    **vars(args),
-                    'device': str(self.device),
-                    'hostname': socket.gethostname(),
-                    'output_dir': self.out_dir,
-                },
-            )
-        
-        # TensorBoard
-        self.writer = SummaryWriter(log_dir=os.path.join(self.out_dir, 'logs'))
-        
-        # CSV Logger
-        self.csv_file = open(os.path.join(self.out_dir, 'metrics.csv'), 'w', newline='')
-        self.csv_writer = csv.writer(self.csv_file)
-        self.csv_writer.writerow(['epoch', 'train_loss', 'train_acc', 'val_loss', 'val_acc', 'time', 'lr'])
         atexit.register(self._cleanup)
         
-        # Save Config
-        with open(os.path.join(self.out_dir, 'config.json'), 'w') as f:
-            json.dump(vars(args), f, indent=4)
-
         # 3. Model & Data
         self.model = get_model(args, self.device)
         self.loaders = get_dataloaders(args)
         self.total_params = sum(p.numel() for p in self.model.parameters())
         self.trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
 
-        if self.wandb is not None and self.wandb_run is not None:
-            self.wandb.config.update({
-                'total_params': self.total_params,
-                'trainable_params': self.trainable_params,
-            }, allow_val_change=True)
-            self.wandb.define_metric('epoch')
-            self.wandb.define_metric('train/*', step_metric='epoch')
-            self.wandb.define_metric('val/*', step_metric='epoch')
-            self.wandb.define_metric('bench/*', step_metric='epoch')
+        self.wandb.config.update({
+            'total_params': self.total_params,
+            'trainable_params': self.trainable_params,
+        }, allow_val_change=True)
+        self.wandb.define_metric('epoch')
+        self.wandb.define_metric('train/*', step_metric='epoch')
+        self.wandb.define_metric('val/*', step_metric='epoch')
+        self.wandb.define_metric('bench/*', step_metric='epoch')
+        self.wandb.define_metric('weights/*', step_metric='epoch')
+        self.wandb.define_metric('grads/*', step_metric='epoch')
         
         # 4. Optimization
         # Handle specific optimizer needs (Video VNNs use Adam with specific groups, CIFAR uses SGD)
         if args.task == 'video':
-            if hasattr(self.model, 'get_1x_lr_params'):
+            get_1x = getattr(self.model, 'get_1x_lr_params', None)
+            if callable(get_1x):
                 params = [
-                    {'params': self.model.get_1x_lr_params(), 'lr': args.lr},
+                    {'params': get_1x(), 'lr': args.lr},
                     # If model has other params not in 1x, add them here or ensure get_1x covers all
                 ]
             else:
@@ -204,7 +210,7 @@ class Trainer:
             self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=5, gamma=0.9)
             
         else: # CIFAR
-            self.optimizer = optim.SGD(self.model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
+            self.optimizer = optim.SGD(self.model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay, nesterov=True)
             self.scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=args.epochs)
             
         self.criterion = nn.CrossEntropyLoss().to(self.device)
@@ -226,17 +232,7 @@ class Trainer:
                 print(f"==> Resuming from epoch {self.start_epoch}")
 
     def _cleanup(self):
-        """Ensure CSV and TensorBoard are flushed/closed on exit or crash."""
-        try:
-            if self.csv_file and not self.csv_file.closed:
-                self.csv_file.flush()
-                self.csv_file.close()
-        except Exception:
-            pass
-        try:
-            self.writer.close()
-        except Exception:
-            pass
+        """Ensure W&B run is closed on exit or crash."""
         try:
             if self.wandb is not None:
                 self.wandb.finish()
@@ -252,7 +248,8 @@ class Trainer:
         return contextlib.nullcontext()
 
     def _log_model_stats(self, epoch):
-        # Weight/grad summaries
+        # Aggregate weight/grad summaries for lightweight W&B logging.
+        stats = {'epoch': epoch + 1}
         with torch.no_grad():
             weight_means = []
             weight_stds = []
@@ -261,27 +258,24 @@ class Trainer:
                 if param is None:
                     continue
                 if param.data is not None:
-                    self.writer.add_scalar(f"Weights/{name}_mean", param.data.mean().item(), epoch)
-                    self.writer.add_scalar(f"Weights/{name}_std", param.data.std().item(), epoch)
-                    self.writer.add_scalar(f"Weights/{name}_min", param.data.min().item(), epoch)
-                    self.writer.add_scalar(f"Weights/{name}_max", param.data.max().item(), epoch)
                     weight_means.append(param.data.mean().item())
                     weight_stds.append(param.data.std().item())
                 if param.grad is not None:
                     grad_norm = param.grad.data.norm(2).item()
-                    self.writer.add_scalar(f"Grads/{name}_norm", grad_norm, epoch)
                     grad_norms.append(grad_norm)
 
             if weight_means:
-                self.writer.add_scalar("Weights/mean", sum(weight_means) / len(weight_means), epoch)
+                stats['weights/mean'] = sum(weight_means) / len(weight_means)
             if weight_stds:
-                self.writer.add_scalar("Weights/std", sum(weight_stds) / len(weight_stds), epoch)
+                stats['weights/std'] = sum(weight_stds) / len(weight_stds)
             if grad_norms:
-                self.writer.add_scalar("Grads/norm_mean", sum(grad_norms) / len(grad_norms), epoch)
+                stats['grads/norm_mean'] = sum(grad_norms) / len(grad_norms)
 
         # Scaler value (if using AMP)
         if self.scaler is not None:
-            self.writer.add_scalar("AMP/scale", float(self.scaler.get_scale()), epoch)
+            stats['amp/scale'] = float(self.scaler.get_scale())
+
+        self.wandb.log(stats)
 
     def train_epoch(self, epoch):
         self.model.train()
@@ -299,7 +293,7 @@ class Trainer:
         for batch_idx, (inputs, targets) in pbar:
             step_start = time.time()
             # Handle Video Fusion Tuple (rgb, flow)
-            if isinstance(inputs, list) and len(inputs) == 2:
+            if isinstance(inputs, (list, tuple)):
                 inputs = [x.to(self.device) for x in inputs]
             else:
                 inputs = inputs.to(self.device)
@@ -374,7 +368,7 @@ class Trainer:
         with torch.no_grad():
             for batch_idx, (inputs, targets) in pbar:
                 step_start = time.time()
-                if isinstance(inputs, list) and len(inputs) == 2:
+                if isinstance(inputs, (list, tuple)):
                     inputs = [x.to(self.device) for x in inputs]
                 else:
                     inputs = inputs.to(self.device)
@@ -415,7 +409,7 @@ class Trainer:
         }
 
     def run(self):
-        print(f"==> Starting training: {self.args.run_name}")
+        print(f"==> Starting training: {self.run_name}")
         full_start = time.time()
         
         for epoch in range(self.start_epoch, self.args.epochs):
@@ -448,38 +442,24 @@ class Trainer:
                     f"train: {train_stats.get('skipped_nonfinite', 0)}, val: {val_stats.get('skipped_nonfinite', 0)}"
                 )
             
-            self.writer.add_scalar('Train/Loss', train_loss, epoch)
-            self.writer.add_scalar('Train/Accuracy', train_acc, epoch)
-            self.writer.add_scalar('Val/Loss', val_loss, epoch)
-            self.writer.add_scalar('Val/Accuracy', val_acc, epoch)
-            self.writer.add_scalar('Info/LearningRate', current_lr, epoch)
-            if len(current_lrs) > 1:
-                for i, lr in enumerate(current_lrs):
-                    self.writer.add_scalar(f'Info/LearningRate/group_{i}', lr, epoch)
-            self.writer.add_scalar('Bench/Train_SamplesPerSec', train_stats['samples_per_sec'], epoch)
-            self.writer.add_scalar('Bench/Val_SamplesPerSec', val_stats['samples_per_sec'], epoch)
-            self.writer.add_scalar('Bench/Train_AvgStepTimeMs', train_stats['avg_step_time'] * 1000.0, epoch)
-            self.writer.add_scalar('Bench/Val_AvgStepTimeMs', val_stats['avg_step_time'] * 1000.0, epoch)
-            self.writer.add_scalar('Bench/Train_SkippedNonFinite', train_stats.get('skipped_nonfinite', 0), epoch)
-            self.writer.add_scalar('Bench/Val_SkippedNonFinite', val_stats.get('skipped_nonfinite', 0), epoch)
-
             self._log_model_stats(epoch)
 
-            if self.wandb is not None:
-                self.wandb.log({
-                    'epoch': epoch + 1,
-                    'train/loss': train_loss,
-                    'train/acc': train_acc,
-                    'val/loss': val_loss,
-                    'val/acc': val_acc,
-                    'lr': current_lr,
-                    'epoch/time_sec': epoch_time,
-                    'bench/train_samples_per_sec': train_stats['samples_per_sec'],
-                    'bench/val_samples_per_sec': val_stats['samples_per_sec'],
-                    'bench/train_avg_step_ms': train_stats['avg_step_time'] * 1000.0,
-                    'bench/val_avg_step_ms': val_stats['avg_step_time'] * 1000.0,
-                    'amp/scale': scaler_val if scaler_val is not None else 0.0,
-                })
+            self.wandb.log({
+                'epoch': epoch + 1,
+                'train/loss': train_loss,
+                'train/acc': train_acc,
+                'val/loss': val_loss,
+                'val/acc': val_acc,
+                'lr': current_lr,
+                'epoch/time_sec': epoch_time,
+                'bench/train_samples_per_sec': train_stats['samples_per_sec'],
+                'bench/val_samples_per_sec': val_stats['samples_per_sec'],
+                'bench/train_avg_step_ms': train_stats['avg_step_time'] * 1000.0,
+                'bench/val_avg_step_ms': val_stats['avg_step_time'] * 1000.0,
+                'bench/train_skipped_nonfinite': train_stats.get('skipped_nonfinite', 0),
+                'bench/val_skipped_nonfinite': val_stats.get('skipped_nonfinite', 0),
+                'amp/scale': scaler_val if scaler_val is not None else 0.0,
+            })
 
             self.epoch_bench.append({
                 'epoch': epoch + 1,
@@ -489,9 +469,6 @@ class Trainer:
                 'val_avg_step_ms': val_stats['avg_step_time'] * 1000.0,
                 'epoch_time_sec': epoch_time,
             })
-            
-            self.csv_writer.writerow([epoch+1, train_loss, train_acc, val_loss, val_acc, epoch_time, current_lr])
-            self.csv_file.flush()
             
             # Checkpointing
             state = {
@@ -516,35 +493,20 @@ class Trainer:
         total_runtime = time.time() - full_start
         avg_train_sps = sum(x['train_samples_per_sec'] for x in self.epoch_bench) / len(self.epoch_bench) if self.epoch_bench else 0.0
         avg_val_sps = sum(x['val_samples_per_sec'] for x in self.epoch_bench) / len(self.epoch_bench) if self.epoch_bench else 0.0
-        benchmark_summary = {
-            'best_val_acc': self.best_acc,
-            'epochs_ran': len(self.epoch_bench),
-            'total_runtime_sec': total_runtime,
-            'avg_train_samples_per_sec': avg_train_sps,
-            'avg_val_samples_per_sec': avg_val_sps,
-            'device': str(self.device),
-            'hostname': socket.gethostname(),
-            'platform': platform.platform(),
-            'total_params': self.total_params,
-            'trainable_params': self.trainable_params,
-            'epoch_benchmarks': self.epoch_bench,
-        }
-        with open(os.path.join(self.out_dir, 'benchmark_summary.json'), 'w') as f:
-            json.dump(benchmark_summary, f, indent=4)
 
-        if self.wandb is not None and self.wandb_run is not None:
-            self.wandb.save(os.path.join(self.out_dir, 'benchmark_summary.json'))
+        self.wandb.summary['best_val_acc'] = self.best_acc
+        self.wandb.summary['epochs_ran'] = len(self.epoch_bench)
+        self.wandb.summary['total_runtime_sec'] = total_runtime
+        self.wandb.summary['avg_train_samples_per_sec'] = avg_train_sps
+        self.wandb.summary['avg_val_samples_per_sec'] = avg_val_sps
+        self.wandb.summary['device'] = str(self.device)
+        self.wandb.summary['hostname'] = socket.gethostname()
+        self.wandb.summary['platform'] = platform.platform()
+        self.wandb.summary['total_params'] = self.total_params
+        self.wandb.summary['trainable_params'] = self.trainable_params
+        self.wandb.summary['epoch_benchmarks'] = self.epoch_bench
 
-        if self.wandb is not None:
-            self.wandb.summary['best_val_acc'] = self.best_acc
-            self.wandb.summary['total_runtime_sec'] = total_runtime
-            self.wandb.summary['avg_train_samples_per_sec'] = avg_train_sps
-            self.wandb.summary['avg_val_samples_per_sec'] = avg_val_sps
-            self.wandb.summary['total_params'] = self.total_params
-            self.wandb.summary['trainable_params'] = self.trainable_params
-                
-        self.writer.close()
-        self.csv_file.close()
+        self.wandb.finish()
         print(f"==> Training Complete. Results saved to {self.out_dir}")
 
 if __name__ == '__main__':
