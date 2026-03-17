@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-from torch.nn.utils import spectral_norm
 
 class VNN(nn.Module):
     def __init__(self, num_classes, num_ch = 3, pretrained=False):
@@ -16,13 +15,13 @@ class VNN(nn.Module):
         self.conv11_1 = nn.Conv3d(num_ch, nch_out1_1, kernel_size=(1, 1, 1), padding=(0, 0, 0))
         self.bn11 = nn.BatchNorm3d(sum_chans)
 
-        self.conv21_5 = spectral_norm(nn.Conv3d(num_ch, 2*Q1*nch_out1_5, kernel_size=(3, 3, 3), padding=(1, 1, 1)))
-        self.conv21_3 = spectral_norm(nn.Conv3d(num_ch, 2*Q1*nch_out1_3, kernel_size=(3, 3, 3), padding=(1, 1, 1)))
-        self.conv21_1 = spectral_norm(nn.Conv3d(num_ch, 2*Q1*nch_out1_1, kernel_size=(1, 1, 1), padding=(0, 0, 0)))
+        self.conv21_5 = nn.Conv3d(num_ch, 2*Q1*nch_out1_5, kernel_size=(3, 3, 3), padding=(1, 1, 1))
+        self.conv21_3 = nn.Conv3d(num_ch, 2*Q1*nch_out1_3, kernel_size=(3, 3, 3), padding=(1, 1, 1))
+        self.conv21_1 = nn.Conv3d(num_ch, 2*Q1*nch_out1_1, kernel_size=(1, 1, 1), padding=(0, 0, 0))
         self.bn21 = nn.BatchNorm3d(sum_chans)
         
-        # Learnable per-channel scale for quadratic branch (starting small for stability)
-        self.poly_scale1 = nn.Parameter(torch.ones(1, sum_chans, 1, 1, 1) * 1e-4)
+        # Learnable gate for quadratic contribution (start small for stability)
+        self.gate1 = nn.Parameter(torch.ones(1) * 1e-4)
 
         self.pool1 = nn.MaxPool3d(kernel_size=(2, 2, 2), stride=(2, 2, 2))
         
@@ -31,9 +30,9 @@ class VNN(nn.Module):
         nch_out2 = 32
         self.conv12 = nn.Conv3d(sum_chans, nch_out2, kernel_size=(3, 3, 3), padding=(1, 1, 1))
         self.bn12 = nn.BatchNorm3d(nch_out2)
-        self.conv22 = spectral_norm(nn.Conv3d(sum_chans, 2*Q2*nch_out2, kernel_size=(3, 3, 3), padding=(1, 1, 1)))
+        self.conv22 = nn.Conv3d(sum_chans, 2*Q2*nch_out2, kernel_size=(3, 3, 3), padding=(1, 1, 1))
         self.bn22 = nn.BatchNorm3d(nch_out2)
-        self.poly_scale2 = nn.Parameter(torch.ones(1, nch_out2, 1, 1, 1) * 1e-4)
+        self.gate2 = nn.Parameter(torch.ones(1) * 1e-4)
         self.pool2 = nn.MaxPool3d(kernel_size=(2, 2, 2), stride=(2, 2, 2))
 
         # Block 3
@@ -41,26 +40,26 @@ class VNN(nn.Module):
         nch_out3 = 64
         self.conv13 = nn.Conv3d(nch_out2, nch_out3, kernel_size=(3, 3, 3), padding=(1, 1, 1))
         self.bn13 = nn.BatchNorm3d(nch_out3)
-        self.conv23 = spectral_norm(nn.Conv3d(nch_out2, 2*Q3*nch_out3, kernel_size=(3, 3, 3), padding=(1, 1, 1)))
+        self.conv23 = nn.Conv3d(nch_out2, 2*Q3*nch_out3, kernel_size=(3, 3, 3), padding=(1, 1, 1))
         self.bn23 = nn.BatchNorm3d(nch_out3)
-        self.poly_scale3 = nn.Parameter(torch.ones(1, nch_out3, 1, 1, 1) * 1e-4)
+        self.gate3 = nn.Parameter(torch.ones(1) * 1e-4)
 
         # Block 4
         Q4 = 4
         nch_out4 = 96
         self.conv14 = nn.Conv3d(nch_out3, nch_out4, kernel_size=(3, 3, 3), padding=(1, 1, 1))
         self.bn14 = nn.BatchNorm3d(nch_out4)
-        self.conv24 = spectral_norm(nn.Conv3d(nch_out3, 2*Q4*nch_out4, kernel_size=(3, 3, 3), padding=(1, 1, 1)))
+        self.conv24 = nn.Conv3d(nch_out3, 2*Q4*nch_out4, kernel_size=(3, 3, 3), padding=(1, 1, 1))
         self.bn24 = nn.BatchNorm3d(nch_out4)
-        self.poly_scale4 = nn.Parameter(torch.ones(1, nch_out4, 1, 1, 1) * 1e-4)
+        self.gate4 = nn.Parameter(torch.ones(1) * 1e-4)
         self.pool4 = nn.MaxPool3d(kernel_size=(2, 2, 2), stride=(2, 2, 2))
 
         self.__init_weight()
 
     def _interact(self, v, Q, n):
         left, right = v[:, :Q*n], v[:, Q*n:]
-        # Chebyshev interaction: 4xy - 2
-        return (4.0 * (left * right) - 2.0).view(v.size(0), Q, n, *v.shape[2:]).sum(dim=1)
+        # Standard Volterra (x*y)
+        return (left * right).view(v.size(0), Q, n, *v.shape[2:]).sum(dim=1)
 
     def forward(self, x):
         # Block 1
@@ -69,33 +68,33 @@ class VNN(nn.Module):
         x21 = self.bn21(torch.cat((self._interact(self.conv21_5(x), Q1, nch_out1_5), 
                                   self._interact(self.conv21_3(x), Q1, nch_out1_3), 
                                   self._interact(self.conv21_1(x), Q1, nch_out1_1)), 1))
-        x = self.pool1(x11 + self.poly_scale1 * x21)
+        x = self.pool1(x11 + self.gate1 * x21)
 
         # Block 2
         Q2=4; nch_out2=32
         x12 = self.bn12(self.conv12(x))
         x22 = self.bn22(self._interact(self.conv22(x), Q2, nch_out2))
-        x = self.pool2(x12 + self.poly_scale2 * x22)
+        x = self.pool2(x12 + self.gate2 * x22)
 
         # Block 3
         Q3=4; nch_out3=64
         x13 = self.bn13(self.conv13(x))
         x23 = self.bn23(self._interact(self.conv23(x), Q3, nch_out3))
-        x = x13 + self.poly_scale3 * x23
+        x = x13 + self.gate3 * x23
 
         # Block 4
         Q4=4; nch_out4=96
         x14 = self.bn14(self.conv14(x))
         x24 = self.bn24(self._interact(self.conv24(x), Q4, nch_out4))
-        x = self.pool4(x14 + self.poly_scale4 * x24)
+        x = self.pool4(x14 + self.gate4 * x24)
 
         return x
  
     def __init_weight(self):
         for name, m in self.named_modules():
             if isinstance(m, nn.Conv3d):
-                if hasattr(m, 'weight_orig'):
-                    nn.init.orthogonal_(m.weight_orig)
+                if 'conv2' in name:
+                    nn.init.xavier_normal_(m.weight, gain=0.01)
                 else:
                     nn.init.kaiming_normal_(m.weight, nonlinearity='linear')
                 if m.bias is not None:
@@ -105,7 +104,6 @@ class VNN(nn.Module):
                 m.bias.data.zero_()
 
 def get_1x_lr_params(model):
-    # Parameters including the new poly_scales
     for p in model.parameters():
         if p.requires_grad:
             yield p

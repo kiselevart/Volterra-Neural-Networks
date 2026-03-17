@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-from torch.nn.utils import spectral_norm
 
 class VNN_F(nn.Module):
     def __init__(self, num_classes, num_ch = 3, pretrained=False):
@@ -11,11 +10,11 @@ class VNN_F(nn.Module):
         self.conv11 = nn.Conv3d(num_ch, nch_out1, kernel_size=(3, 3, 3), padding=(1, 1, 1))
         self.bn11 = nn.BatchNorm3d(nch_out1)
         
-        self.conv21 = spectral_norm(nn.Conv3d(num_ch, 2*Q1*nch_out1, kernel_size=(3, 3, 3), padding=(1, 1, 1)))
+        self.conv21 = nn.Conv3d(num_ch, 2*Q1*nch_out1, kernel_size=(3, 3, 3), padding=(1, 1, 1))
         self.bn21 = nn.BatchNorm3d(nch_out1)
         
-        # Learnable per-channel scale (starting small)
-        self.poly_scale = nn.Parameter(torch.ones(1, nch_out1, 1, 1, 1) * 1e-4)
+        # Learnable gate (start small)
+        self.gate1 = nn.Parameter(torch.ones(1) * 1e-4)
         
         self.pool1 = nn.MaxPool3d(kernel_size=(2, 2, 2), stride=(2, 2, 2))
         
@@ -30,13 +29,13 @@ class VNN_F(nn.Module):
         x11 = self.bn11(self.conv11(x))
         x21 = self.conv21(x)
         
-        # Orthogonal Interaction: 4xy - 2
+        # Volterra Interaction
         left, right = x21[:, :Q1*nch_out1], x21[:, Q1*nch_out1:]
-        interaction = (4.0 * (left * right) - 2.0).view(x.size(0), Q1, nch_out1, *x.shape[2:]).sum(dim=1)
+        interaction = (left * right).view(x.size(0), Q1, nch_out1, *x.shape[2:]).sum(dim=1)
         x21_add = self.bn21(interaction)
         
-        # Activation-free Fusion with Learnable Scale
-        x = self.pool1(x11 + self.poly_scale * x21_add)
+        # Gated Addition
+        x = self.pool1(x11 + self.gate1 * x21_add)
 
         x = x.view(-1, 12544)
         x = self.dropout(x)
@@ -47,8 +46,8 @@ class VNN_F(nn.Module):
     def __init_weight(self):
         for name, m in self.named_modules():
             if isinstance(m, nn.Conv3d):
-                if hasattr(m, 'weight_orig'):
-                    nn.init.orthogonal_(m.weight_orig)
+                if 'conv2' in name:
+                    nn.init.xavier_normal_(m.weight, gain=0.01)
                 else:
                     nn.init.kaiming_normal_(m.weight, nonlinearity='linear')
                 if m.bias is not None:
@@ -58,7 +57,6 @@ class VNN_F(nn.Module):
                 m.bias.data.zero_()
         
 def get_1x_lr_params(model):
-    # Skip fc8 for 10x LR
     skip = set(model.fc8.parameters())
     for p in model.parameters():
         if p.requires_grad and p not in skip:
