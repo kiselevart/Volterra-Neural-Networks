@@ -40,77 +40,24 @@ class VNN_F(nn.Module):
         self.fc8 = nn.Linear(12544, num_classes)
 
         self.dropout = nn.Dropout(p=0.5)
-
-        
+        self.gate1 = nn.Parameter(torch.ones(1) * 1e-4)
 
         self.__init_weight()
         
     def forward(self, x, activation = False):
-        # Q0=2
-        # nch_out0 = 96
-        # x10 = self.conv10(x)
-        # x10 = self.bn10(x10)
-
-        # x20 = self.conv20(x)
-
-        # x20_mul = torch.mul(x20[:,0:Q0*nch_out0,:,:,:],x20[:,Q0*nch_out0:2*Q0*nch_out0,:,:,:])
-        # x20_add = torch.zeros_like(x10)
-        # for q in range(Q0):
-        #     x20_add = torch.add(x20_add, x20_mul[:,(q*nch_out0):((q*nch_out0)+(nch_out0)),:,:,:])
-        # x20_add = self.bn20(x20_add)
-        # x = torch.add(x10, x20_add)
-
         Q1=2
         nch_out1 = 256
 
-        x11 = self.conv11(x)
-        x11 = self.bn11(x11)
-        
+        x11 = self.bn11(self.conv11(x))
         x21 = self.conv21(x)
         
- 
-        x21_mul = torch.mul(x21[:,0:Q1*nch_out1,:,:,:],x21[:,Q1*nch_out1:2*Q1*nch_out1,:,:,:])
-        x21_add = torch.zeros_like(x11)
-        for q in range(Q1):
-            x21_add = torch.add(x21_add, x21_mul[:,(q*nch_out1):((q*nch_out1)+(nch_out1)),:,:,:])
-        x21_add = self.bn21(x21_add)
-        x = self.pool1(torch.add(x11, x21_add))
+        x21_mul = x21[:, :Q1*nch_out1] * x21[:, Q1*nch_out1:]
+        x21_add = self.bn21(x21_mul.view(x21_mul.size(0), Q1, nch_out1, *x21_mul.shape[2:]).sum(dim=1))
+        
+        # Addition (No ReLU)
+        x = x11 + self.gate1 * x21_add
+        x = self.pool1(x)
 
-        # Q1_red=2
-        # nch_out1_red = 96
-        
-        # x11_red = self.conv11_red(x)
-        # x11_red = self.bn11_red(x11_red)
-        
-        # x21_red = self.conv21_red(x)
-        
- 
-        # x21_red_mul = torch.mul(x21_red[:,0:Q1_red*nch_out1_red,:,:,:],x21_red[:,Q1_red*nch_out1_red:2*Q1_red*nch_out1_red,:,:,:])
-        # x21_red_add = torch.zeros_like(x11_red)
-        # for q in range(Q1_red):
-        #     x21_red_add = torch.add(x21_red_add, x21_red_mul[:,(q*nch_out1_red):((q*nch_out1_red)+(nch_out1_red)),:,:,:])
-        # x21_red_add = self.bn21_red(x21_red_add)
-        # x = torch.add(x11_red, x21_red_add)
-
-        # Q2=2
-        # nch_out2 = 512
-
-        # x12 = self.conv12(x)
-        # x12 = self.bn12(x12)
-        
-        # x22 = self.conv22(x)
-        
- 
-        # x22_mul = torch.mul(x22[:,0:Q2*nch_out2,:,:,:],x22[:,Q2*nch_out2:2*Q2*nch_out2,:,:,:])
-        # x22_add = torch.zeros_like(x12)
-        # for q in range(Q2):
-        #     x22_add = torch.add(x22_add, x22_mul[:,(q*nch_out2):((q*nch_out2)+(nch_out2)),:,:,:])
-        # x22_add = self.bn22(x22_add)
-        # x = self.pool2(torch.add(x12, x22_add))
-        
-        
-        
-#         print(x.shape)
         x = x.view(-1, 12544)
         
         
