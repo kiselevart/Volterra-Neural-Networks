@@ -139,7 +139,7 @@ def get_dataloaders(args):
             augment=False,
         )
 
-        if args.model in ("vnn_fusion", "vnn_fusion_ho"):
+        if args.model in ("vnn_fusion", "vnn_fusion_v3", "vnn_fusion_ho"):
             # Wrap for Flow
             train_ds = FlowDatasetWrapper(train_ds)
             val_ds = FlowDatasetWrapper(val_ds)

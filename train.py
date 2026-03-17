@@ -48,6 +48,7 @@ def parse_args():
             "vnn_fusion",
             "vnn_rgb_ho",
             "vnn_fusion_ho",
+            "vnn_fusion_v3",
             "vnn_complex_ho",
             "vnn_cubic_simple_toggle",
         ],
