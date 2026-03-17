@@ -121,11 +121,15 @@ class VNN_F(nn.Module):
         return logits
     
     def __init_weight(self):
-        for m in self.modules():
+        for name, m in self.named_modules():
             if isinstance(m, nn.Conv3d):
-                # n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
-                # m.weight.data.normal_(0, math.sqrt(2. / n))
-                torch.nn.init.kaiming_normal_(m.weight)
+                # Use Xavier with small gain for multiplicative branch
+                if 'conv2' in name:
+                    torch.nn.init.xavier_normal_(m.weight, gain=0.01)
+                else:
+                    torch.nn.init.xavier_normal_(m.weight, gain=1.0)
+                if m.bias is not None:
+                    m.bias.data.zero_()
             elif isinstance(m, nn.BatchNorm3d):
                 m.weight.data.fill_(1)
                 m.bias.data.zero_()
