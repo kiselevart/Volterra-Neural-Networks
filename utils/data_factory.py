@@ -95,6 +95,12 @@ def get_dataloaders(args):
 
     loaders = {}
 
+    # pin_memory only benefits CUDA; persistent_workers and prefetch_factor
+    # are invalid (raise ValueError) when num_workers=0.
+    pin_memory = torch.cuda.is_available()
+    use_workers = args.num_workers > 0
+    worker_kwargs = dict(persistent_workers=True, prefetch_factor=2) if use_workers else {}
+
     if args.task == "cifar":
         transform_train = transforms.Compose(
             [
@@ -147,12 +153,24 @@ def get_dataloaders(args):
             batch_size=args.batch_size,
             shuffle=True,
             num_workers=args.num_workers,
+            pin_memory=pin_memory,
+            **worker_kwargs,
         )
         loaders["val"] = DataLoader(
-            valset, batch_size=100, shuffle=False, num_workers=args.num_workers
+            valset,
+            batch_size=100,
+            shuffle=False,
+            num_workers=args.num_workers,
+            pin_memory=pin_memory,
+            **worker_kwargs,
         )
         loaders["test"] = DataLoader(
-            testset, batch_size=100, shuffle=False, num_workers=args.num_workers
+            testset,
+            batch_size=100,
+            shuffle=False,
+            num_workers=args.num_workers,
+            pin_memory=pin_memory,
+            **worker_kwargs,
         )
 
     elif args.task == "video":
@@ -190,18 +208,24 @@ def get_dataloaders(args):
             batch_size=args.batch_size,
             shuffle=True,
             num_workers=args.num_workers,
+            pin_memory=pin_memory,
+            **worker_kwargs,
         )
         loaders["val"] = DataLoader(
             val_ds,
             batch_size=args.batch_size,
             shuffle=False,
             num_workers=args.num_workers,
+            pin_memory=pin_memory,
+            **worker_kwargs,
         )
         loaders["test"] = DataLoader(
             test_ds,
             batch_size=args.batch_size,
             shuffle=False,
             num_workers=args.num_workers,
+            pin_memory=pin_memory,
+            **worker_kwargs,
         )
 
     return loaders
