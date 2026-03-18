@@ -4,8 +4,10 @@ from sklearn.model_selection import train_test_split
 import torch
 import cv2
 import numpy as np
+from tqdm import tqdm
 from torch.utils.data import Dataset
 from mypath import Path
+from utils.video_utils import calculate_video_flow
 
 
 class VideoDataset(Dataset):
@@ -284,6 +286,51 @@ class VideoDataset(Dataset):
                 os.rmdir(target_dir)
             except OSError:
                 pass
+        elif i > 0:
+            self._compute_and_save_flow(target_dir)
+
+    def _compute_and_save_flow(self, video_dir):
+        """Compute optical flow from raw frames in video_dir and save to flow.npy.
+
+        Operates on full-resolution frames (before any crop/normalize) so the
+        stored flow can be spatially cropped at load time to match any RGB crop.
+        Output: float32 array [2, T, H, W] saved as flow.npy alongside the frames.
+        """
+        frame_paths = sorted([
+            os.path.join(video_dir, f)
+            for f in os.listdir(video_dir) if f.endswith('.jpg')
+        ])
+        if len(frame_paths) < 2:
+            return
+
+        imgs = [cv2.imread(p) for p in frame_paths]
+        imgs = [img for img in imgs if img is not None]
+        if len(imgs) < 2:
+            return
+
+        # [T, H, W, C] → tensor [C, T, H, W], raw uint8 pixel values (no normalization)
+        video_tensor = torch.from_numpy(
+            np.stack(imgs, axis=0)
+        ).permute(3, 0, 1, 2).float()
+
+        flow = calculate_video_flow(video_tensor)  # [2, T, H, W]
+        np.save(os.path.join(video_dir, "flow.npy"), flow.numpy())
+
+    def ensure_flows(self):
+        """Compute and cache flow.npy for any video directory that lacks one.
+
+        Idempotent — skips videos that already have flow.npy. Intended for
+        datasets preprocessed before flow caching was introduced.
+        """
+        missing = [
+            d for d in self.fnames
+            if not os.path.exists(os.path.join(d, "flow.npy"))
+        ]
+        if not missing:
+            return
+        print(f"==> Computing optical flow for {len(missing)} videos (one-time)...")
+        for video_dir in tqdm(missing, desc="Flow"):
+            self._compute_and_save_flow(video_dir)
 
     def randomflip(self, buffer):
         """Horizontally flip the given image and ground truth randomly with a probability of 0.5."""
@@ -306,7 +353,7 @@ class VideoDataset(Dataset):
         return buffer.transpose((3, 0, 1, 2))
 
     def load_frames(self, file_dir):
-        frames = sorted([os.path.join(file_dir, img) for img in os.listdir(file_dir)])
+        frames = sorted([os.path.join(file_dir, img) for img in os.listdir(file_dir) if img.endswith('.jpg')])
         frame_count = len(frames)
         if frame_count == 0:
             return np.empty((0, self.resize_height, self.resize_width, 3), np.dtype('float32'))

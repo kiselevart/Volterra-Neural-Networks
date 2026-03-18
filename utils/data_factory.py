@@ -1,5 +1,6 @@
-import warnings
+import os
 
+import numpy as np
 import torch
 import torchvision
 import torchvision.transforms as transforms
@@ -7,47 +8,83 @@ from torch.utils.data import DataLoader, Dataset
 
 # Project Imports
 from dataloaders.dataset import VideoDataset
-from utils.video_utils import calculate_video_flow
 
 
 class FlowDatasetWrapper(Dataset):
-    """
-    Wraps the standard VideoDataset to compute Optical Flow on the fly.
+    """Two-stream wrapper that pairs RGB clips with pre-cached optical flow.
+
+    On first use, calls ensure_flows() to compute any missing flow.npy files
+    (idempotent — subsequent runs skip videos that already have flow cached).
+
+    Spatial crop, temporal crop, and horizontal flip are computed once and
+    applied identically to both streams, keeping RGB and flow spatially aligned.
+    Flow is loaded from the full-resolution flow.npy stored alongside the frames,
+    then cropped to match the RGB clip.
     """
 
     def __init__(self, original_dataset):
         self.dataset = original_dataset
+        self.dataset.ensure_flows()
 
     def __getitem__(self, index):
-        # Get raw data from original dataset
-        # Assuming original returns (video, label)
-        rgb_video, label = self.dataset[index]
+        ds = self.dataset
 
-        # Explicit non-finite check on RGB input to prevent propagation
-        if not torch.isfinite(rgb_video).all():
-            rgb_video = torch.nan_to_num(rgb_video, nan=0.0, posinf=255.0, neginf=-255.0)
+        # Load full-resolution frames [T, H, W, C] — before any crop or normalize
+        buffer = ds.load_frames(ds.fnames[index])
 
-        # Reconstruct pixel-domain frames for optical flow by reversing the
-        # dataset's own normalization. Using self.dataset.mean ensures this
-        # stays in sync if the normalization parameters ever change.
-        mean = torch.tensor(self.dataset.mean, dtype=torch.float32).view(3, 1, 1, 1)
-        rgb_for_flow = (rgb_video.clone() + mean).clamp(0.0, 255.0)
+        # Compute shared crop indices applied to both RGB and flow
+        if ds.augment:
+            max_t = buffer.shape[0] - ds.clip_len
+            t_idx = np.random.randint(max_t + 1) if max_t > 0 else 0
+            h_idx = np.random.randint(max(1, buffer.shape[1] - ds.crop_size))
+            w_idx = np.random.randint(max(1, buffer.shape[2] - ds.crop_size))
+        else:
+            t_idx = max(0, (buffer.shape[0] - ds.clip_len) // 2)
+            h_idx = max(0, (buffer.shape[1] - ds.crop_size) // 2)
+            w_idx = max(0, (buffer.shape[2] - ds.crop_size) // 2)
 
-        # Compute Flow here
-        flow_video = calculate_video_flow(rgb_for_flow)
+        do_flip = ds.augment and np.random.random() < 0.5
 
-        # sanitize non-finite values from optical-flow estimation
-        if not torch.isfinite(flow_video).all():
-            flow_video = torch.nan_to_num(flow_video, nan=0.0, posinf=1.0, neginf=-1.0)
+        # --- RGB stream ---
+        rgb = buffer[t_idx:t_idx + ds.clip_len,
+                     h_idx:h_idx + ds.crop_size,
+                     w_idx:w_idx + ds.crop_size]
+        rgb = ds.ensure_clip_len(rgb, ds.clip_len)
+        if do_flip:
+            rgb = ds.randomflip(rgb)
+        rgb = ds.normalize(rgb)
+        rgb = torch.from_numpy(ds.to_tensor(rgb))
+        if not torch.isfinite(rgb).all():
+            rgb = torch.nan_to_num(rgb, nan=0.0, posinf=255.0, neginf=-255.0)
 
-        # stricter safety clamp to prevent huge activations in Volterra terms.
-        # Volterra interactions multiply inputs, so values like 5.0 are still risky.
-        # [-2.0, 2.0] is much safer for a normalized flow field.
-        flow_video = flow_video.clamp(min=-2.0, max=2.0).float()
+        # --- Flow stream: load pre-cached [2, T_full, H_full, W_full] ---
+        flow = torch.from_numpy(
+            np.load(os.path.join(ds.fnames[index], "flow.npy"))
+        )
+        flow = flow[:, t_idx:t_idx + ds.clip_len,
+                       h_idx:h_idx + ds.crop_size,
+                       w_idx:w_idx + ds.crop_size]
+        flow = self._ensure_flow_clip_len(flow, ds.clip_len)
+        if do_flip:
+            flow = torch.flip(flow, dims=[3])  # flip width dimension
+            flow = flow.clone()
+            flow[0] = -flow[0]                 # negate x-component (direction reverses)
+        if not torch.isfinite(flow).all():
+            flow = torch.nan_to_num(flow, nan=0.0, posinf=1.0, neginf=-1.0)
+        flow = flow.clamp(-2.0, 2.0).float()
 
-        # Return tuple (rgb, flow), label
-        # In the training loop, we check if input is a list/tuple
-        return [rgb_video, flow_video], label
+        label = torch.from_numpy(np.array(ds.label_array[index]))
+        return [rgb, flow], label
+
+    def _ensure_flow_clip_len(self, flow, clip_len):
+        """Pad or trim flow tensor [2, T, H, W] to exactly clip_len frames."""
+        T = flow.shape[1]
+        if T == clip_len:
+            return flow
+        if T > clip_len:
+            return flow[:, :clip_len]
+        pad = flow[:, -1:].repeat(1, clip_len - T, 1, 1)
+        return torch.cat([flow, pad], dim=1)
 
     def __len__(self):
         return len(self.dataset)
