@@ -22,12 +22,10 @@ class VNN(nn.Module):
     """4-block 3D VNN backbone with multi-scale first block.
 
     Args:
-        num_classes: Unused (kept for API compat); this module outputs features.
         num_ch: Input channels (3 for RGB, 2 for optical flow).
-        pretrained: Unused (kept for API compat).
     """
 
-    def __init__(self, num_classes, num_ch=3, pretrained=False):
+    def __init__(self, num_ch=3):
         super().__init__()
 
         # Block 1: Multi-kernel, quadratic only
@@ -60,16 +58,9 @@ class VNN(nn.Module):
         return x
 
 
-def get_1x_lr_params(model):
-    """Returns all trainable parameters."""
-    for p in model.parameters():
-        if p.requires_grad:
-            yield p
-
-
 if __name__ == "__main__":
     inputs = torch.rand(1, 3, 16, 112, 112)
-    net = VNN(num_classes=101)
+    net = VNN(num_ch=3)
     outputs = net(inputs)
     print(f"Input: {inputs.shape}, Output: {outputs.shape}")
 

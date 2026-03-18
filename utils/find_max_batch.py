@@ -16,9 +16,14 @@ from utils.model_factory import get_model
 def parse_args():
     parser = argparse.ArgumentParser(description="Find max batch size that fits in VRAM")
     parser.add_argument("--task", type=str, required=True, choices=["cifar", "video"])
-    parser.add_argument("--dataset", type=str, required=True, choices=["cifar10", "ucf10", "ucf101", "hmdb51"])
-    parser.add_argument("--model", type=str, required=True, choices=["vnn_simple", "vnn_ortho", "resnet18", "vnn_rgb", "vnn_fusion"])
+    parser.add_argument("--dataset", type=str, required=True, choices=["cifar10", "ucf10", "ucf11", "ucf101", "hmdb51"])
+    parser.add_argument("--model", type=str, required=True, choices=[
+        "vnn_simple", "vnn_ortho", "resnet18",
+        "vnn_rgb", "vnn_fusion",
+        "vnn_rgb_ho", "vnn_fusion_ho", "vnn_complex_ho", "vnn_cubic_simple_toggle",
+    ])
     parser.add_argument("--Q", type=int, default=2, help="Volterra interaction factor (for VNNs)")
+    parser.add_argument("--disable_cubic", action="store_true", help="Disable cubic path (for vnn_cubic_simple_toggle)")
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--max_batch", type=int, default=2048, help="Upper bound to try")
     parser.add_argument("--dtype", type=str, default="fp16", choices=["fp16", "fp32"])
@@ -31,10 +36,9 @@ def parse_args():
 
 def make_dummy_input(args, batch_size, device, dtype):
     if args.task == "cifar":
-        x = torch.randn(batch_size, 3, 32, 32, device=device, dtype=dtype)
-        return x
-    # video: assume 3x16x112x112 clips; flow stream has 2 channels
-    if args.model == "vnn_fusion":
+        return torch.randn(batch_size, 3, 32, 32, device=device, dtype=dtype)
+    # video: 3×16×112×112 clips; fusion models need a second flow stream (2 channels)
+    if args.model in ("vnn_fusion", "vnn_fusion_ho"):
         rgb = torch.randn(batch_size, 3, 16, 112, 112, device=device, dtype=dtype)
         flow = torch.randn(batch_size, 2, 16, 112, 112, device=device, dtype=dtype)
         return [rgb, flow]
@@ -110,12 +114,8 @@ def main():
     dtype = torch.float16 if args.dtype == "fp16" else torch.float32
 
     # Set num_classes from dataset
-    if args.dataset in ["cifar10", "ucf10"]:
-        args.num_classes = 10
-    elif args.dataset == "ucf101":
-        args.num_classes = 101
-    elif args.dataset == "hmdb51":
-        args.num_classes = 51
+    ds_map = {"cifar10": 10, "ucf10": 10, "ucf11": 11, "ucf101": 101, "hmdb51": 51}
+    args.num_classes = ds_map[args.dataset]
 
     device = torch.device("cuda")
     model = get_model(args, device)

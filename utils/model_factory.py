@@ -103,7 +103,7 @@ def get_model(args, device):
             class VideoVNN_HO(nn.Module):
                 def __init__(self, num_classes):
                     super().__init__()
-                    self.backbone = vnn_rgb_ho.VNN(num_classes=num_classes, num_ch=3)
+                    self.backbone = vnn_rgb_ho.VNN(num_ch=3)
                     self.head = vnn_fusion_ho.VNN_F(num_classes=num_classes, num_ch=96)
 
                 def forward(self, x):
@@ -116,8 +116,8 @@ def get_model(args, device):
             class VideoVNNFusion_HO(nn.Module):
                 def __init__(self, num_classes):
                     super().__init__()
-                    self.model_rgb = vnn_rgb_ho.VNN(num_classes=num_classes, num_ch=3)
-                    self.model_of = vnn_rgb_ho.VNN(num_classes=num_classes, num_ch=2)
+                    self.model_rgb = vnn_rgb_ho.VNN(num_ch=3)
+                    self.model_of = vnn_rgb_ho.VNN(num_ch=2)
                     self.model_fuse = vnn_fusion_ho.VNN_F(
                         num_classes=num_classes, num_ch=192
                     )

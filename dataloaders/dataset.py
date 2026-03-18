@@ -52,7 +52,10 @@ class VideoDataset(Dataset):
                                ' You need to download it from official website.')
 
         if (not self.check_preprocess()) or preprocess:
-            print('Preprocessing of {} dataset, this will take long, but it will be done only once.'.format(dataset))
+            print(f'==> Preprocessing {dataset} dataset — extracting frames from videos.')
+            print(f'    Source : {self.root_dir}')
+            print(f'    Output : {self.output_dir}')
+            print(f'    This runs once and may take 10–60+ minutes depending on dataset size.')
             self.preprocess()
 
         # Obtain all the filenames of files inside all the class folders

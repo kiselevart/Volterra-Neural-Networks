@@ -28,12 +28,11 @@ class VNN(nn.Module):
     Args:
         num_classes: Number of output classes (used if ``with_head=True``).
         num_ch: Input channels (3 for RGB).
-        pretrained: Unused (API compat).
         with_head: If True, includes ClassifierHead and returns logits.
                    If False, returns feature maps.
     """
 
-    def __init__(self, num_classes=400, num_ch=3, pretrained=False, with_head=True):
+    def __init__(self, num_classes=400, num_ch=3, with_head=True):
         super().__init__()
         self.with_head = with_head
 
@@ -86,13 +85,6 @@ class VNN(nn.Module):
         if self.with_head:
             x = self.classifier(x)
         return x
-
-
-def get_1x_lr_params(model):
-    """Returns all trainable parameters."""
-    for p in model.parameters():
-        if p.requires_grad:
-            yield p
 
 
 if __name__ == "__main__":
