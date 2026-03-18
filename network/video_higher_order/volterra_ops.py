@@ -30,7 +30,13 @@ def volterra_quadratic(x_conv, Q, nch_out):
     mid = Q * nch_out
     left = x_conv[:, :mid]
     right = x_conv[:, mid:]
+    
+    # Quadratic product: (a * b)
     product = left * right  # [B, Q*C, T, H, W]
+    
+    # Stability: Clamp before summation to prevent explosion
+    product = torch.clamp(product, min=-50.0, max=50.0)
+    
     shape = product.shape
     return product.view(shape[0], Q, nch_out, *shape[2:]).sum(dim=1)
 
@@ -54,7 +60,13 @@ def volterra_cubic_symmetric(x_conv, Q, nch_out):
     mid = Q * nch_out
     a = x_conv[:, :mid]   # Feature detector (will be squared)
     b = x_conv[:, mid:]   # Modulator/gate
-    product = (a * a) * b  # a²·b  [B, Q*C, T, H, W]
+    
+    # Cubic product: (a² * b)
+    product = (a * a) * b  # [B, Q*C, T, H, W]
+    
+    # Stability: Clamp before summation
+    product = torch.clamp(product, min=-50.0, max=50.0)
+    
     shape = product.shape
     return product.view(shape[0], Q, nch_out, *shape[2:]).sum(dim=1)
 
@@ -74,7 +86,13 @@ def volterra_cubic_general(x_conv, Q, nch_out):
         Tensor [B, C, T, H, W].
     """
     a, b, c = torch.chunk(x_conv, 3, dim=1)
+    
+    # Cubic product: (a * b * c)
     product = a * b * c  # [B, Q*C, T, H, W]
+    
+    # Stability: Clamp before summation
+    product = torch.clamp(product, min=-50.0, max=50.0)
+    
     shape = product.shape
     return product.view(shape[0], Q, nch_out, *shape[2:]).sum(dim=1)
 

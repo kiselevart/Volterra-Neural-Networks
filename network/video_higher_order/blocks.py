@@ -42,7 +42,7 @@ class VolterraBlock3D(nn.Module):
 
     def __init__(self, in_ch, out_ch, Q=4, Qc=2, stride=1,
                  use_cubic=False, cubic_mode='symmetric',
-                 use_shortcut=False, gate_quadratic=False,
+                 use_shortcut=False, gate_quadratic=True,
                  kernel_size=3):
         super().__init__()
         self.out_ch = out_ch
@@ -64,14 +64,14 @@ class VolterraBlock3D(nn.Module):
         self.conv_quad = nn.Conv3d(in_ch, 2 * Q * out_ch, ks, padding=pad)
         self.bn_quad = nn.BatchNorm3d(out_ch)
         if gate_quadratic:
-            self.quad_gate = nn.Parameter(torch.zeros(1))
+            self.quad_gate = nn.Parameter(torch.ones(1) * 1e-4)
 
         # --- Cubic path (optional) ---
         if use_cubic:
             cubic_mult = 3 if cubic_mode == 'general' else 2
             self.conv_cubic = nn.Conv3d(in_ch, cubic_mult * Qc * out_ch, ks, padding=pad)
             self.bn_cubic = nn.BatchNorm3d(out_ch)
-            self.cubic_gate = nn.Parameter(torch.zeros(1))
+            self.cubic_gate = nn.Parameter(torch.ones(1) * 1e-4)
 
         # --- Shortcut (optional) ---
         if use_shortcut:
@@ -130,7 +130,7 @@ class MultiKernelBlock3D(nn.Module):
     """
 
     def __init__(self, in_ch, ch_per_kernel, kernels, Q=4, stride=1,
-                 use_shortcut=False, gate_quadratic=False):
+                 use_shortcut=False, gate_quadratic=True):
         super().__init__()
         self.Q = Q
         self.ch_per_kernel = ch_per_kernel
@@ -154,7 +154,7 @@ class MultiKernelBlock3D(nn.Module):
         self.bn_quad = nn.BatchNorm3d(self.out_ch)
 
         if gate_quadratic:
-            self.quad_gate = nn.Parameter(torch.zeros(1))
+            self.quad_gate = nn.Parameter(torch.ones(1) * 1e-4)
 
         if use_shortcut:
             self.shortcut = nn.Sequential(
