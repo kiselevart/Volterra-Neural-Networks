@@ -61,12 +61,22 @@ class VideoDataset(Dataset):
         # Obtain all the filenames of files inside all the class folders
         # Going through each class folder one at a time
         self.fnames, labels = [], []
+        skipped = 0
         for label in sorted(os.listdir(folder)):
             for fname in os.listdir(os.path.join(folder, label)):
-                self.fnames.append(os.path.join(folder, label, fname))
+                fpath = os.path.join(folder, label, fname)
+                if not os.path.isdir(fpath):
+                    continue
+                n_frames = sum(1 for f in os.listdir(fpath) if f.endswith('.jpg'))
+                if n_frames < self.clip_len:
+                    skipped += 1
+                    continue
+                self.fnames.append(fpath)
                 labels.append(label)
 
         assert len(labels) == len(self.fnames)
+        if skipped:
+            print(f'  [INFO] Skipped {skipped} videos with fewer than {self.clip_len} frames.')
         print('Number of {} videos: {:d}'.format(split, len(self.fnames)))
 
         # Prepare a mapping between the label names (strings) and indices (ints)
@@ -102,6 +112,7 @@ class VideoDataset(Dataset):
 
         if self.augment:
             buffer = self.randomflip(buffer)
+            buffer = self.color_jitter(buffer)
         buffer = self.normalize(buffer)
         buffer = self.to_tensor(buffer)
         return torch.from_numpy(buffer), torch.from_numpy(labels)
@@ -250,20 +261,22 @@ class VideoDataset(Dataset):
             capture.release()
             return
 
-        os.makedirs(target_dir, exist_ok=True)
-
         frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
         frame_width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
         frame_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-        # Make sure splited video has at least 16 frames
+        # Skip videos that are too short even at 1:1 extraction
+        if frame_count < self.clip_len:
+            print(f"[SKIP] {os.path.basename(src_path)}: only {frame_count} frames (need {self.clip_len})")
+            capture.release()
+            return
+
+        # Lower extraction frequency until we yield at least clip_len frames
         EXTRACT_FREQUENCY = 4
-        if frame_count // EXTRACT_FREQUENCY <= 16:
+        while EXTRACT_FREQUENCY > 1 and frame_count // EXTRACT_FREQUENCY < self.clip_len:
             EXTRACT_FREQUENCY -= 1
-            if frame_count // EXTRACT_FREQUENCY <= 16:
-                EXTRACT_FREQUENCY -= 1
-                if frame_count // EXTRACT_FREQUENCY <= 16:
-                    EXTRACT_FREQUENCY -= 1
+
+        os.makedirs(target_dir, exist_ok=True)
 
         count = 0
         i = 0
@@ -343,6 +356,16 @@ class VideoDataset(Dataset):
                 buffer[i] = cv2.flip(buffer[i], flipCode=1)
 
         return buffer
+
+    def color_jitter(self, buffer, brightness=0.3, contrast=0.3):
+        """Random brightness and contrast jitter applied uniformly across all frames.
+
+        buffer: [T, H, W, C] float32 with raw pixel values in [0, 255].
+        Returns buffer in the same range and dtype.
+        """
+        alpha = 1.0 + np.random.uniform(-contrast, contrast)   # contrast scale
+        beta = np.random.uniform(-brightness, brightness) * 255.0  # brightness shift
+        return np.clip(alpha * buffer + beta, 0.0, 255.0).astype(buffer.dtype)
 
 
     def normalize(self, buffer):

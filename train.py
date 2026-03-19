@@ -26,6 +26,7 @@ def parse_args():
     parser.add_argument("--lr", type=float, default=0.01)
     parser.add_argument("--momentum", type=float, default=0.9)
     parser.add_argument("--weight_decay", type=float, default=5e-4)
+    parser.add_argument("--label_smoothing", type=float, default=0.0)
     parser.add_argument("--Q", type=int, default=2)
     parser.add_argument("--disable_cubic", action="store_true")
 
@@ -59,7 +60,7 @@ class Trainer:
         # Initialize Model, Data, and Criterion
         self.model = get_model(args, self.device)
         self.loaders = get_dataloaders(args)
-        self.criterion = nn.CrossEntropyLoss().to(self.device)
+        self.criterion = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing).to(self.device)
         self._setup_optimizer(args)
         
         # Mixed Precision Setup

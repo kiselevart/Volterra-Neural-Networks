@@ -3,8 +3,10 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview
-
 This is a research implementation of **Volterra Neural Networks (VNN)** — polynomial-filtering-based neural networks for image classification (CIFAR-10) and video action recognition (UCF101, HMDB51, UCF10, UCF11). The core idea is replacing standard convolutions with 2nd- and 3rd-order polynomial (Volterra series) interactions to reduce over-parameterization.
+
+## Important Note
+A lot of imporvements have been identified in IMPROVEMENTS.md. If a number such as x.x is used it is likely referring to one of them. Make sure to update IMPROVEMENTS.md if you have completed one of these tasks or you identify a new issue.
 
 ## Commands
 

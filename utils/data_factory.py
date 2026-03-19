@@ -52,6 +52,8 @@ class FlowDatasetWrapper(Dataset):
         rgb = ds.ensure_clip_len(rgb, ds.clip_len)
         if do_flip:
             rgb = ds.randomflip(rgb)
+        if ds.augment:
+            rgb = ds.color_jitter(rgb)
         rgb = ds.normalize(rgb)
         rgb = torch.from_numpy(ds.to_tensor(rgb))
         if not torch.isfinite(rgb).all():
