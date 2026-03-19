@@ -26,6 +26,8 @@ def parse_args():
     parser.add_argument("--lr", type=float, default=0.01)
     parser.add_argument("--momentum", type=float, default=0.9)
     parser.add_argument("--weight_decay", type=float, default=5e-4)
+    parser.add_argument("--fc_lr_mult", type=float, default=10.0, help="LR multiplier for the final FC layer (video models)")
+    parser.add_argument("--warmup_epochs", type=int, default=5, help="Linear LR warmup epochs before cosine decay (video only)")
     parser.add_argument("--label_smoothing", type=float, default=0.0)
     parser.add_argument("--Q", type=int, default=2)
     parser.add_argument("--disable_cubic", action="store_true")
@@ -129,16 +131,30 @@ class Trainer:
         if args.task == "video":
             get_1x = getattr(self.model, "get_1x_lr_params", None)
             get_10x = getattr(self.model, "get_10x_lr_params", None)
-            
-            params = [{"params": get_1x(), "lr": args.lr}] if callable(get_1x) else self.model.parameters()
-            if callable(get_10x):
-                params.append({"params": get_10x(), "lr": args.lr * 10})
-                
+
+            if callable(get_1x):
+                params = [{"params": get_1x(), "lr": args.lr}]
+                if callable(get_10x):
+                    params.append({"params": get_10x(), "lr": args.lr * args.fc_lr_mult})
+            else:
+                params = self.model.parameters()
+
             self.optimizer = optim.Adam(params, lr=args.lr, weight_decay=args.weight_decay)
-            self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=5, gamma=0.9)
+
+            cosine_epochs = max(1, args.epochs - args.warmup_epochs)
+            cosine = optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=cosine_epochs)
+            if args.warmup_epochs > 0:
+                warmup = optim.lr_scheduler.LinearLR(
+                    self.optimizer, start_factor=0.1, end_factor=1.0, total_iters=args.warmup_epochs
+                )
+                self.scheduler = optim.lr_scheduler.SequentialLR(
+                    self.optimizer, schedulers=[warmup, cosine], milestones=[args.warmup_epochs]
+                )
+            else:
+                self.scheduler = cosine
         else:
-            self.optimizer = optim.SGD(self.model.parameters(), lr=args.lr, momentum=args.momentum, 
-                                     weight_decay=args.weight_decay, nesterov=True)
+            self.optimizer = optim.SGD(self.model.parameters(), lr=args.lr, momentum=args.momentum,
+                                       weight_decay=args.weight_decay, nesterov=True)
             self.scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=args.epochs)
 
     def _get_weight_stats(self):

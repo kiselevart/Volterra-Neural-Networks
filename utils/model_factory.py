@@ -43,6 +43,14 @@ def get_model(args, device):
                 def forward(self, x):
                     return self.head(self.backbone(x))
 
+                def get_1x_lr_params(self):
+                    p = list(self.backbone.parameters())
+                    p += list(vnn_fusion_ho.get_1x_lr_params(self.head))
+                    return p
+
+                def get_10x_lr_params(self):
+                    return list(vnn_fusion_ho.get_10x_lr_params(self.head))
+
             net = VideoVNN_HO(num_classes=args.num_classes)
 
         elif args.model == "vnn_fusion_ho":
@@ -63,6 +71,15 @@ def get_model(args, device):
                     cross = out_rgb * out_of
                     return self.model_fuse(torch.cat((out_rgb, out_of, cross), 1))
 
+                def get_1x_lr_params(self):
+                    p = list(self.model_rgb.parameters())
+                    p += list(self.model_of.parameters())
+                    p += list(vnn_fusion_ho.get_1x_lr_params(self.model_fuse))
+                    return p
+
+                def get_10x_lr_params(self):
+                    return list(vnn_fusion_ho.get_10x_lr_params(self.model_fuse))
+
             net = VideoVNNFusion_HO(num_classes=args.num_classes)
 
         elif args.model == "vnn_complex_ho":
@@ -82,11 +99,12 @@ def get_model(args, device):
                     return self.head(feats)
 
                 def get_1x_lr_params(self):
-                    p = []
-                    p += list(self.backbone.parameters())
+                    p = list(self.backbone.parameters())
                     p += list(vnn_fusion_ho.get_1x_lr_params(self.head))
-                    p += list(vnn_fusion_ho.get_10x_lr_params(self.head))
                     return p
+
+                def get_10x_lr_params(self):
+                    return list(vnn_fusion_ho.get_10x_lr_params(self.head))
 
             net = VideoVNNCubicToggle(
                 num_classes=args.num_classes, use_cubic=not args.disable_cubic

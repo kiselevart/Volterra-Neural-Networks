@@ -63,6 +63,8 @@ FC input becomes exactly `out_ch` (256) regardless of resolution. The hardcoded 
 ### 2.2 No activation on the linear path
 `VolterraBlock3D` computes `out = BN(conv_lin(x))` with no activation. The linear output is unbounded before summing with the polynomial terms. Adding `ReLU` after the full summation `out = pool(relu(out))` would match standard ResNet behavior and improve gradient flow through the linear residual.
 
+**Note:** Unlike ResNets, Volterra blocks already have non-linearity from the polynomial paths. Adding ReLU after summation clamps the output to non-negative, preventing downstream blocks from seeing negative activations that the quadratic/cubic terms can meaningfully produce. This reduces theoretical expressiveness. Any activation here should be ablated carefully.
+
 ### 2.3 `VNN_F` fusion head accepts only one block configuration
 The fusion head is a single `VolterraBlock3D(num_ch→256, Q=2, Qc=2, stride=2)`. Q and Qc are not exposed as constructor args. If `num_ch=288` (post cross-product fusion), the internal quadratic conv is `288→2·2·256=1024` channels — relatively large. Exposing `Q` and `Qc` as `VNN_F(num_classes, num_ch, Q=2, Qc=2)` would allow ablating fusion head capacity independently of backbone capacity.
 
@@ -84,21 +86,7 @@ The RGB backbone (`num_ch=3`) and flow backbone (`num_ch=2`) share the exact sam
 
 **Fix:** call `_get_weight_stats()` once per epoch (or every 50 batches via `batch_idx % 50 == 0`), not every batch.
 
-### 3.2 `vnn_fusion_ho` and `vnn_rgb_ho` miss differential LR
-`train.py` checks `getattr(model, "get_1x_lr_params", None)`. `VideoVNNFusion_HO` and `VideoVNN_HO` in `model_factory.py` do not implement these methods, so all parameters train at 1× LR. The differential 10× multiplier on the final FC — intended to ramp up the classifier relative to the backbone — silently doesn't apply to the two production models. The `VNN_F` fusion head has `get_1x_lr_params` and `get_10x_lr_params` but they're only reached if the wrapper exposes them.
-
-**Fix:** add `get_1x_lr_params` / `get_10x_lr_params` to `VideoVNNFusion_HO` and `VideoVNN_HO`, delegating to `self.model_fuse`/`self.head`.
-
-### 3.3 `vnn_cubic_simple_toggle.get_1x_lr_params` adds 10× params into 1× group
-```python
-def get_1x_lr_params(self):
-    p += list(vnn_fusion_ho.get_1x_lr_params(self.head))
-    p += list(vnn_fusion_ho.get_10x_lr_params(self.head))  # ← wrong: added to 1x
-    return p
-```
-The final FC parameters are added to the 1× group. Since `get_10x_lr_params` isn't defined on the model, train.py never creates a 10× group. Result: FC trains at 1× LR, same as backbone.
-
-### 3.4 Scheduler state not saved on checkpoint
+### 3.2 Scheduler state not saved on checkpoint
 `torch.save({"optimizer": ...})` does not include `scheduler.state_dict()`. On resume, the scheduler restarts from epoch 0 — with `StepLR(step_size=5, gamma=0.9)` this means the LR jumps back to its initial value instead of where training left off.
 
 **Fix:**
@@ -108,15 +96,15 @@ torch.save({"scheduler": self.scheduler.state_dict(), ...}, path)
 self.scheduler.load_state_dict(ckpt["scheduler"])
 ```
 
-### 3.5 No LR warmup for gated polynomial networks
+### 3.3 No LR warmup for gated polynomial networks ✓ DONE
 At epoch 0, gates are at `1e-4` — the model is nearly linear. The linear conv path updates aggressively from step 1 at full LR, establishing a feature space before polynomial terms have activated. The polynomial gates then try to learn on top of a rapidly shifting linear representation.
 
 A 3–5 epoch linear warmup (`LinearLR(start_factor=0.1, end_factor=1.0, total_iters=5)` chained via `SequentialLR` with the existing step/cosine schedule) lets the linear path stabilize first, then the full LR unlocks as the gates start growing. Standard for transformer/gated architectures.
 
-### 3.6 `StepLR(step_size=5, gamma=0.9)` is a weak schedule for video
+### 3.4 `StepLR(step_size=5, gamma=0.9)` is a weak schedule for video ✓ DONE
 After 50 epochs, LR reaches `0.9^10 = 0.35` of its initial value — barely decayed. The step shape also creates visible loss spikes on step epochs. `CosineAnnealingLR(T_max=50)` decays smoothly to near-zero by epoch 50, gives faster final convergence, and is already used for CIFAR. Direct drop-in replacement.
 
-### 3.7 Weight decay applied to BatchNorm — suppresses learned scales
+### 3.5 Weight decay applied to BatchNorm — suppresses learned scales
 The Adam optimizer uses `weight_decay=5e-4` applied to all parameters including BN `γ` and `β`. BN `γ` is the per-channel learned scale after normalization; L2 decay on it continuously pushes it toward zero, opposing the task gradient whenever a channel's useful amplitude is > 0. Standard practice excludes BN and bias parameters:
 ```python
 decay = [p for n, p in model.named_parameters() if 'bn' not in n and 'bias' not in n]
@@ -127,10 +115,10 @@ optimizer = Adam([
 ], lr=args.lr)
 ```
 
-### 3.8 No test evaluation at end of training
+### 3.6 No test evaluation at end of training
 The training loop saves `best_model.pth` but never loads it and runs `_run_epoch(epoch, "test")` on the held-out test set. Final metrics require a manual `--test_only --resume` invocation.
 
-### 3.9 `torch.compile()` unused
+### 3.7 `torch.compile()` unused
 PyTorch 2.0+ `torch.compile()` can give 20–50% throughput improvement for element-wise-heavy models. Volterra interactions are exactly this: the quadratic/cubic paths are dominated by element-wise multiplications and reductions. Wrapping the model on CUDA with an `--no_compile` escape hatch is a no-risk speedup:
 ```python
 if args.device == "cuda" and not args.no_compile:
