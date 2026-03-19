@@ -12,7 +12,7 @@ A lot of imporvements have been identified in IMPROVEMENTS.md. If a number such 
 
 **Install dependencies:**
 ```bash
-pip install -r requirements.txt
+conda env create -f environment.yml && conda activate vnn
 ```
 
 **Train CIFAR-10:**
