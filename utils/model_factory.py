@@ -5,15 +5,10 @@ import torchvision.models as models
 from network.cifar.vnn_cifar import VNN_CIFAR
 from network.cifar_ortho.res_vnn_ortho import ResVNN_Ortho_CIFAR
 
-# Imports from existing codebase
-from network.video import (
-    vnn_fusion_highQ,
-    vnn_rgb_of_highQ,
-)
-from network.video_higher_order import backbone_4block as vnn_rgb_ho
-from network.video_higher_order import backbone_7block as vnn_complex_ho
-from network.video_higher_order import backbone_cubic_toggle as vnn_cubic_toggle
-from network.video_higher_order import fusion_head as vnn_fusion_ho
+from network.video import backbone_4block as vnn_rgb_ho
+from network.video import backbone_7block as vnn_complex_ho
+from network.video import backbone_cubic_toggle as vnn_cubic_toggle
+from network.video import fusion_head as vnn_fusion_ho
 
 
 def get_model(args, device):
@@ -37,68 +32,7 @@ def get_model(args, device):
             raise ValueError(f"Unknown CIFAR model: {args.model}")
 
     elif args.task == "video":
-        if args.model == "vnn_rgb":
-            # RGB Backbone -> Classifier
-            # Note: We need to wrap them into a single module for simplicity in the training loop
-            class VideoVNN(nn.Module):
-                def __init__(self, num_classes):
-                    super().__init__()
-                    self.backbone = vnn_rgb_of_highQ.VNN(
-                        num_classes=num_classes, num_ch=3, pretrained=False
-                    )
-                    self.head = vnn_fusion_highQ.VNN_F(
-                        num_classes=num_classes, num_ch=96, pretrained=False
-                    )
-
-                def forward(self, x):
-                    feats = self.backbone(x)
-                    return self.head(feats)
-
-                def get_1x_lr_params(self):
-                    return list(
-                        vnn_rgb_of_highQ.get_1x_lr_params(self.backbone)
-                    ) + list(self.head.parameters())
-
-            net = VideoVNN(num_classes=args.num_classes)
-
-        elif args.model == "vnn_fusion":
-            # RGB + Flow streams
-            # This requires a more complex forward pass handling inputs=(rgb, flow)
-            # For this factory, we return the container, but the training loop handles the tuple unpacking
-            class VideoVNNFusion(nn.Module):
-                def __init__(self, num_classes):
-                    super().__init__()
-                    self.model_rgb = vnn_rgb_of_highQ.VNN(
-                        num_classes=num_classes, num_ch=3, pretrained=False
-                    )
-                    self.model_of = vnn_rgb_of_highQ.VNN(
-                        num_classes=num_classes, num_ch=2, pretrained=False
-                    )
-                    self.model_fuse = vnn_fusion_highQ.VNN_F(
-                        num_classes=num_classes, num_ch=192, pretrained=False
-                    )
-
-                def forward(self, x):
-                    # Expects x to be (rgb, flow)
-                    rgb, flow = x
-                    out_rgb = self.model_rgb(rgb)
-                    out_of = self.model_of(flow)
-                    out_fuse = self.model_fuse(torch.cat((out_rgb, out_of), 1))
-                    return out_fuse
-
-                def get_1x_lr_params(self):
-                    p = []
-                    p += list(vnn_rgb_of_highQ.get_1x_lr_params(self.model_rgb))
-                    p += list(vnn_rgb_of_highQ.get_1x_lr_params(self.model_of))
-                    p += list(vnn_fusion_highQ.get_1x_lr_params(self.model_fuse))
-                    return p
-
-                def get_10x_lr_params(self):
-                    return list(vnn_fusion_highQ.get_10x_lr_params(self.model_fuse))
-
-            net = VideoVNNFusion(num_classes=args.num_classes)
-
-        elif args.model == "vnn_rgb_ho":
+        if args.model == "vnn_rgb_ho":
             # Higher-order (cubic) RGB backbone + cubic fusion head
             class VideoVNN_HO(nn.Module):
                 def __init__(self, num_classes):

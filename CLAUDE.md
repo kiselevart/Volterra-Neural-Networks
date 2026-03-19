@@ -42,7 +42,7 @@ There is no test suite — validation is done via training runs with different c
 
 ### Model Hierarchy (video)
 
-The primary video model family lives in `network/video_higher_order/`:
+The primary video model family lives in `network/video/`:
 
 ```
 volterra_ops.py       — math primitives: volterra_quadratic, volterra_cubic_symmetric, volterra_cubic_general

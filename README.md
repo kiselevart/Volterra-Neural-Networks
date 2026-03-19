@@ -424,10 +424,7 @@ Several mechanisms guard against the instability inherent in polynomial feature 
 │   │   └── vnn_cifar.py            # Simple VNN for CIFAR-10
 │   ├── cifar_ortho/
 │   │   └── res_vnn_ortho.py        # ResNet18-like VNN with Chebyshev T2 + spectral norm
-│   ├── video/                      # Legacy video models (older backbones)
-│   │   ├── vnn_rgb_of_highQ.py
-│   │   └── vnn_fusion_highQ.py
-│   └── video_higher_order/         # Current primary video model family
+│   └── video/                      # Primary video model family
 │       ├── volterra_ops.py         # Math primitives: quadratic, cubic_symmetric, cubic_general
 │       ├── blocks.py               # VolterraBlock3D, MultiKernelBlock3D
 │       ├── backbone_4block.py      # 4-block backbone → [B, 96, T/8, H/8, W/8]

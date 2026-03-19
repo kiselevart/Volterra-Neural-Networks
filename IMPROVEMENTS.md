@@ -144,19 +144,13 @@ if args.device == "cuda" and not args.no_compile:
 ### 4.1 Production model classes defined inline in `model_factory.py`
 `VideoVNNFusion_HO`, `VideoVNN_HO`, `VideoVNNCubicToggle` are local class definitions inside `if/elif` blocks. They're invisible to grep, static analysis, and type checkers. They should be proper top-level classes in `network/video_higher_order/` (e.g., a `models.py`) or at minimum defined at module level in `model_factory.py`.
 
-### 4.2 Legacy `network/video/` code still imported
-`model_factory.py` imports `vnn_fusion_highQ` and `vnn_rgb_of_highQ` from `network/video/`. These GroupNorm-based older models are superseded by `network/video_higher_order/`. If they're kept as baselines, that's fine, but they should be moved to `network/legacy/` or clearly marked deprecated so new contributors don't accidentally use them.
-
-### 4.3 `vnn_rgb_of_complex.py` has debug prints and wrong return value
-`network/video/vnn_rgb_of_complex.py` line 240 has `print('x: ', x.shape)` in the forward pass. The inline quadratic loops (manual per-Q iteration) should also be replaced with vectorized `volterra_ops.py` calls. This file appears to return intermediate features rather than logits at line 250.
-
-### 4.4 `num_classes` mapping duplicated in `train.py`
+### 4.2 `num_classes` mapping duplicated in `train.py`
 ```python
 num_classes_map = {"cifar10": 10, "ucf11": 11, "ucf101": 101, ...}
 ```
 This should live in a shared `utils/constants.py` (or in `data_factory.py` alongside the loader construction) so it's a single source of truth if dataset support changes.
 
-### 4.5 `check_preprocess()` only validates 10 classes
+### 4.3 `check_preprocess()` only validates 10 classes
 The integrity check in `dataset.py` loops over `ii` up to 10 classes:
 ```python
 if ii == 10:
@@ -164,6 +158,6 @@ if ii == 10:
 ```
 A corrupt video in class 11+ passes silently. Remove the limit or at minimum raise it to the full dataset size.
 
-### 4.6 `backbone_4block.py` `__main__` smoke test incomplete
+### 4.4 `backbone_4block.py` `__main__` smoke test incomplete
 The `__main__` block tests backbone output shape but not the full pipeline (backbone → fusion head → classifier). The hardcoded `12544` in `ClassifierHead` can break silently with shape changes that the backbone test wouldn't catch. The smoke test should run a dummy input through the complete `vnn_fusion_ho` stack.
 

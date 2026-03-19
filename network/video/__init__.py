@@ -1,5 +1,5 @@
 """
-video_higher_order — 3D Volterra Neural Network modules for video.
+video — 3D Volterra Neural Network modules for video.
 
 Provides backbone architectures and fusion heads with 2nd + 3rd order
 Volterra interactions for video classification.
