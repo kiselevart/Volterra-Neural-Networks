@@ -98,19 +98,30 @@ class Trainer:
     def _setup_logging(self, args):
         import wandb
         self.wandb = wandb
-        
+
         timestamp = datetime.now().strftime('%b%d_%H-%M-%S')
         self.run_name = args.run_name or f"{args.model}_{args.dataset}_{timestamp}"
         self.out_dir = os.path.join("runs", self.run_name)
         os.makedirs(os.path.join(self.out_dir, "checkpoints"), exist_ok=True)
-        
+
         init_kwargs = {
-            "name": args.wandb_name or self.run_name, 
+            "name": args.wandb_name or self.run_name,
             "mode": args.wandb_mode,
             "dir": self.out_dir,
             "config": vars(args)
         }
-        
+
+        # Resume the same W&B run if the checkpoint recorded a run id
+        if args.resume and os.path.isfile(args.resume):
+            try:
+                peek = torch.load(args.resume, map_location="cpu")
+                wandb_run_id = peek.get("wandb_run_id")
+                if wandb_run_id:
+                    init_kwargs["id"] = wandb_run_id
+                    init_kwargs["resume"] = "must"
+            except Exception:
+                pass
+
         self.wandb.init(**init_kwargs)
         atexit.register(lambda: self.wandb.finish() if self.wandb else None)
 
@@ -238,7 +249,7 @@ class Trainer:
 
             if v_stats["acc"] > self.best_acc:
                 self.best_acc = v_stats["acc"]
-                torch.save({"epoch": epoch+1, "state_dict": self.model.state_dict(), "optimizer": self.optimizer.state_dict(), "best_acc": self.best_acc}, 
+                torch.save({"epoch": epoch+1, "state_dict": self.model.state_dict(), "optimizer": self.optimizer.state_dict(), "best_acc": self.best_acc, "wandb_run_id": self.wandb.run.id if self.wandb.run else None},
                            os.path.join(self.out_dir, "checkpoints", "best_model.pth"))
 
         total_runtime = time.time() - start_time_total
