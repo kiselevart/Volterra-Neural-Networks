@@ -139,14 +139,12 @@ class MultiKernelBlock3D(nn.Module):
         self.use_shortcut = use_shortcut
         self.gate_quadratic = gate_quadratic
 
-        # Linear paths (one conv per kernel size)
         self.lin_convs = nn.ModuleList()
         for ks in kernels:
             pad = tuple(k // 2 for k in ks)
             self.lin_convs.append(nn.Conv3d(in_ch, ch_per_kernel, ks, padding=pad))
         self.bn_lin = nn.BatchNorm3d(self.out_ch)
 
-        # Quadratic paths (one conv per kernel size)
         self.quad_convs = nn.ModuleList()
         for ks in kernels:
             pad = tuple(k // 2 for k in ks)
@@ -167,10 +165,8 @@ class MultiKernelBlock3D(nn.Module):
         init_vnn_weights(self)
 
     def forward(self, x):
-        # Linear: parallel convs → concat → BN
         lin = self.bn_lin(torch.cat([c(x) for c in self.lin_convs], dim=1))
 
-        # Quadratic: parallel interactions → concat → BN
         quads = [volterra_quadratic(c(x), self.Q, self.ch_per_kernel)
                  for c in self.quad_convs]
         quad = self.bn_quad(torch.cat(quads, dim=1))
@@ -184,7 +180,6 @@ class MultiKernelBlock3D(nn.Module):
             out = self.shortcut(x) + out
 
         return self.pool(out)
-
 
 class ClassifierHead(nn.Module):
     """Flatten → Dropout → FC classifier.

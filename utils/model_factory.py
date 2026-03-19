@@ -83,11 +83,9 @@ def get_model(args, device):
             net = VideoVNNFusion_HO(num_classes=args.num_classes)
 
         elif args.model == "vnn_complex_ho":
-            # Higher-order (cubic) deep 7-block complex backbone (includes classifier)
             net = vnn_complex_ho.VNN(num_classes=args.num_classes, num_ch=3)
 
         elif args.model == "vnn_cubic_simple_toggle":
-            # Simple 4-block Volterra backbone with optional cubic toggle + cubic fusion classifier
             class VideoVNNCubicToggle(nn.Module):
                 def __init__(self, num_classes, use_cubic=True):
                     super().__init__()
