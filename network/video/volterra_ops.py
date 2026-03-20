@@ -35,7 +35,7 @@ def volterra_quadratic(x_conv, Q, nch_out):
     product = left * right  # [B, Q*C, T, H, W]
     
     # Stability: Clamp before summation to prevent explosion
-    product = torch.clamp(product, min=-50.0, max=50.0)
+    product = torch.clamp(product, min=-10.0, max=10.0)
     
     shape = product.shape
     return product.view(shape[0], Q, nch_out, *shape[2:]).sum(dim=1)
@@ -65,7 +65,7 @@ def volterra_cubic_symmetric(x_conv, Q, nch_out):
     product = (a * a) * b  # [B, Q*C, T, H, W]
     
     # Stability: Clamp before summation
-    product = torch.clamp(product, min=-50.0, max=50.0)
+    product = torch.clamp(product, min=-10.0, max=10.0)
     
     shape = product.shape
     return product.view(shape[0], Q, nch_out, *shape[2:]).sum(dim=1)
@@ -91,7 +91,7 @@ def volterra_cubic_general(x_conv, Q, nch_out):
     product = a * b * c  # [B, Q*C, T, H, W]
     
     # Stability: Clamp before summation
-    product = torch.clamp(product, min=-50.0, max=50.0)
+    product = torch.clamp(product, min=-10.0, max=10.0)
     
     shape = product.shape
     return product.view(shape[0], Q, nch_out, *shape[2:]).sum(dim=1)

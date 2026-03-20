@@ -181,21 +181,47 @@ class MultiKernelBlock3D(nn.Module):
 
         return self.pool(out)
 
-class ClassifierHead(nn.Module):
-    """Flatten → Dropout → FC classifier.
+class TemporalSE(nn.Module):
+    """Temporal squeeze-and-excite attention.
+
+    Pools over (H, W), applies Linear(T, T) + softmax over the T axis,
+    then reweights each temporal frame independently per channel.
 
     Args:
-        fc_features: Number of features after flatten.
-        num_classes: Number of output classes.
-        dropout: Dropout probability (default 0.5).
+        num_frames: Expected temporal dimension T after the backbone (e.g. clip_len // 8).
     """
 
-    def __init__(self, fc_features, num_classes, dropout=0.5):
+    def __init__(self, num_frames):
         super().__init__()
+        self.attn = nn.Linear(num_frames, num_frames)
+
+    def forward(self, x):
+        # x: [B, C, T, H, W]
+        sq = x.mean(dim=(-2, -1))                          # [B, C, T]
+        wt = torch.softmax(self.attn(sq), dim=-1)          # [B, C, T]
+        return x * wt.unsqueeze(-1).unsqueeze(-1)          # [B, C, T, H, W]
+
+
+class ClassifierHead(nn.Module):
+    """Pool → Flatten → Dropout → FC classifier.
+
+    Args:
+        fc_features: Number of features after flatten (= number of channels when pool3d=True).
+        num_classes: Number of output classes.
+        dropout: Dropout probability (default 0.5).
+        pool3d: If True, apply AdaptiveAvgPool3d((1,1,1)) before flattening so the
+                FC input size equals ``fc_features`` regardless of spatial/temporal dims.
+    """
+
+    def __init__(self, fc_features, num_classes, dropout=0.5, pool3d=False):
+        super().__init__()
+        self.pool = nn.AdaptiveAvgPool3d((1, 1, 1)) if pool3d else None
         self.dropout = nn.Dropout(dropout)
         self.fc = nn.Linear(fc_features, num_classes)
 
     def forward(self, x):
+        if self.pool is not None:
+            x = self.pool(x)
         x = x.view(x.size(0), -1)
         x = self.dropout(x)
         return self.fc(x)

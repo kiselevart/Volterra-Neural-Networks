@@ -27,15 +27,15 @@ class VNN_F(nn.Module):
         pretrained: Unused (API compat).
     """
 
-    def __init__(self, num_classes, num_ch=3, pretrained=False):
+    def __init__(self, num_classes, num_ch=3, Q=2, Qc=2, pretrained=False):
         super().__init__()
 
         self.block1 = VolterraBlock3D(
-            num_ch, 256, Q=2, Qc=2, stride=2,
+            num_ch, 256, Q=Q, Qc=Qc, stride=2,
             use_cubic=True, cubic_mode='symmetric',
             use_shortcut=True, gate_quadratic=True,
         )
-        self.classifier = ClassifierHead(12544, num_classes)
+        self.classifier = ClassifierHead(self.block1.out_ch, num_classes, pool3d=True)
 
     def forward(self, x):
         x = self.block1(x)

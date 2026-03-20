@@ -42,7 +42,7 @@ Only `ColorJitter(brightness=0.3, contrast=0.3)` is applied. Adding saturation a
 
 ## 2. Architecture
 
-### 2.1 Hardcoded `fc_features=12544` in `ClassifierHead`
+### 2.1 Hardcoded `fc_features=12544` in `ClassifierHead` ✓ DONE
 `fusion_head.py` passes `12544` directly:
 ```python
 self.classifier = ClassifierHead(12544, num_classes)
@@ -65,16 +65,16 @@ FC input becomes exactly `out_ch` (256) regardless of resolution. The hardcoded 
 
 **Note:** Unlike ResNets, Volterra blocks already have non-linearity from the polynomial paths. Adding ReLU after summation clamps the output to non-negative, preventing downstream blocks from seeing negative activations that the quadratic/cubic terms can meaningfully produce. This reduces theoretical expressiveness. Any activation here should be ablated carefully.
 
-### 2.3 `VNN_F` fusion head accepts only one block configuration
+### 2.3 `VNN_F` fusion head accepts only one block configuration ✓ DONE
 The fusion head is a single `VolterraBlock3D(num_ch→256, Q=2, Qc=2, stride=2)`. Q and Qc are not exposed as constructor args. If `num_ch=288` (post cross-product fusion), the internal quadratic conv is `288→2·2·256=1024` channels — relatively large. Exposing `Q` and `Qc` as `VNN_F(num_classes, num_ch, Q=2, Qc=2)` would allow ablating fusion head capacity independently of backbone capacity.
 
-### 2.4 Clamp range `[-50, 50]` potentially too wide
+### 2.4 Clamp range `[-50, 50]` potentially too wide ✓ DONE
 After BN, activations are ~O(-3, 3). The quadratic `left * right` product is ~O(9), and the cubic ~O(27). The clamp at ±50 therefore never triggers in normal operation. A tighter clamp like `[-10, 10]` would only engage in genuine instability events (gradient explosions that slip past clipping) and would provide a harder guard. Worth ablating.
 
-### 2.5 No temporal attention before fusion
+### 2.5 No temporal attention before fusion ✓ DONE
 Both backbone streams pool time via `MaxPool3d(stride=2)` at each block, which gives uniform temporal weighting. A lightweight 1D temporal attention (e.g., squeeze-and-excite over the T axis before the cross-product) could let the model upweight frames where motion and appearance are most discriminative. Minimal parameter cost: `Linear(T, T)` with softmax.
 
-### 2.6 Two streams use identical architecture regardless of modality
+### 2.6 Two streams use identical architecture regardless of modality ✓ DONE
 The RGB backbone (`num_ch=3`) and flow backbone (`num_ch=2`) share the exact same Q, Qc, and channel counts. Flow is noisier, lower-dynamic-range, and has only 2 input channels. A smaller Q or reduced depth for the flow stream might generalize better and reduce total parameters. Worth ablating.
 
 ---
@@ -104,7 +104,7 @@ A 3–5 epoch linear warmup (`LinearLR(start_factor=0.1, end_factor=1.0, total_i
 ### 3.4 `StepLR(step_size=5, gamma=0.9)` is a weak schedule for video ✓ DONE
 After 50 epochs, LR reaches `0.9^10 = 0.35` of its initial value — barely decayed. The step shape also creates visible loss spikes on step epochs. `CosineAnnealingLR(T_max=50)` decays smoothly to near-zero by epoch 50, gives faster final convergence, and is already used for CIFAR. Direct drop-in replacement.
 
-### 3.5 Weight decay applied to BatchNorm — suppresses learned scales
+### 3.5 Weight decay applied to BatchNorm — suppresses learned scales ✓ DONE
 The Adam optimizer uses `weight_decay=5e-4` applied to all parameters including BN `γ` and `β`. BN `γ` is the per-channel learned scale after normalization; L2 decay on it continuously pushes it toward zero, opposing the task gradient whenever a channel's useful amplitude is > 0. Standard practice excludes BN and bias parameters:
 ```python
 decay = [p for n, p in model.named_parameters() if 'bn' not in n and 'bias' not in n]

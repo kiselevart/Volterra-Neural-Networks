@@ -23,31 +23,33 @@ class VNN(nn.Module):
 
     Args:
         num_ch: Input channels (3 for RGB, 2 for optical flow).
+        Q: Quadratic rank for all blocks (default 4).
+        Qc: Cubic rank for blocks 3 and 4 (default 2).
     """
 
-    def __init__(self, num_ch=3):
+    def __init__(self, num_ch=3, Q=4, Qc=2):
         super().__init__()
 
         # Block 1: Multi-kernel, quadratic only
         self.block1 = MultiKernelBlock3D(
             num_ch, ch_per_kernel=8,
             kernels=[(5, 5, 5), (3, 3, 3), (1, 1, 1)],
-            Q=4, stride=2,
+            Q=Q, stride=2,
         )
 
         # Block 2: Quadratic only
-        self.block2 = VolterraBlock3D(24, 32, Q=4, stride=2, use_shortcut=True)
+        self.block2 = VolterraBlock3D(24, 32, Q=Q, stride=2, use_shortcut=True)
 
         # Block 3: Quadratic + Symmetric Cubic (no pool)
         self.block3 = VolterraBlock3D(
-            32, 64, Q=4, Qc=2,
+            32, 64, Q=Q, Qc=Qc,
             use_cubic=True, cubic_mode='symmetric',
             use_shortcut=True,
         )
 
         # Block 4: Quadratic + Symmetric Cubic
         self.block4 = VolterraBlock3D(
-            64, 96, Q=4, Qc=2, stride=2,
+            64, 96, Q=Q, Qc=Qc, stride=2,
             use_cubic=True, cubic_mode='symmetric',
             use_shortcut=True,
         )

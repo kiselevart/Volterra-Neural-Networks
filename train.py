@@ -132,14 +132,25 @@ class Trainer:
             get_1x = getattr(self.model, "get_1x_lr_params", None)
             get_10x = getattr(self.model, "get_10x_lr_params", None)
 
-            if callable(get_1x):
-                params = [{"params": get_1x(), "lr": args.lr}]
-                if callable(get_10x):
-                    params.append({"params": get_10x(), "lr": args.lr * args.fc_lr_mult})
-            else:
-                params = self.model.parameters()
+            def split_wd(param_list, lr_val):
+                """Split into decay (ndim>1) and no-decay (ndim<=1: BN, bias, gates)."""
+                decay = [p for p in param_list if p.ndim > 1]
+                no_decay = [p for p in param_list if p.ndim <= 1]
+                groups = []
+                if decay:
+                    groups.append({"params": decay, "lr": lr_val, "weight_decay": args.weight_decay})
+                if no_decay:
+                    groups.append({"params": no_decay, "lr": lr_val, "weight_decay": 0.0})
+                return groups
 
-            self.optimizer = optim.Adam(params, lr=args.lr, weight_decay=args.weight_decay)
+            if callable(get_1x):
+                param_groups = split_wd(list(get_1x()), args.lr)
+                if callable(get_10x):
+                    param_groups += split_wd(list(get_10x()), args.lr * args.fc_lr_mult)
+            else:
+                param_groups = self.model.parameters()
+
+            self.optimizer = optim.Adam(param_groups, lr=args.lr, weight_decay=args.weight_decay)
 
             cosine_epochs = max(1, args.epochs - args.warmup_epochs)
             cosine = optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=cosine_epochs)

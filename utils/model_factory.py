@@ -9,6 +9,7 @@ from network.video import backbone_4block as vnn_rgb_ho
 from network.video import backbone_7block as vnn_complex_ho
 from network.video import backbone_cubic_toggle as vnn_cubic_toggle
 from network.video import fusion_head as vnn_fusion_ho
+from network.video.blocks import TemporalSE
 
 
 def get_model(args, device):
@@ -58,16 +59,18 @@ def get_model(args, device):
             class VideoVNNFusion_HO(nn.Module):
                 def __init__(self, num_classes):
                     super().__init__()
-                    self.model_rgb = vnn_rgb_ho.VNN(num_ch=3)
-                    self.model_of = vnn_rgb_ho.VNN(num_ch=2)
+                    self.model_rgb = vnn_rgb_ho.VNN(num_ch=3, Q=4)
+                    self.model_of = vnn_rgb_ho.VNN(num_ch=2, Q=2)   # smaller Q: flow is noisier
+                    self.temporal_se_rgb = TemporalSE(num_frames=2)  # clip_len=16 → T/8=2
+                    self.temporal_se_of = TemporalSE(num_frames=2)
                     self.model_fuse = vnn_fusion_ho.VNN_F(
                         num_classes=num_classes, num_ch=288
                     )
 
                 def forward(self, x):
                     rgb, flow = x
-                    out_rgb = self.model_rgb(rgb)
-                    out_of = self.model_of(flow)
+                    out_rgb = self.temporal_se_rgb(self.model_rgb(rgb))
+                    out_of = self.temporal_se_of(self.model_of(flow))
                     cross = out_rgb * out_of
                     return self.model_fuse(torch.cat((out_rgb, out_of, cross), 1))
 
