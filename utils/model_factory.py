@@ -60,7 +60,7 @@ def get_model(args, device):
                 def __init__(self, num_classes):
                     super().__init__()
                     self.model_rgb = vnn_rgb_ho.VNN(num_ch=3, Q=4)
-                    self.model_of = vnn_rgb_ho.VNN(num_ch=2, Q=2)   # smaller Q: flow is noisier
+                    self.model_of = vnn_rgb_ho.VNN(num_ch=2, Q=4)
                     self.temporal_se_rgb = TemporalSE(num_frames=2)  # clip_len=16 → T/8=2
                     self.temporal_se_of = TemporalSE(num_frames=2)
                     self.model_fuse = vnn_fusion_ho.VNN_F(

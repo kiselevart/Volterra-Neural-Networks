@@ -42,7 +42,7 @@ Only `ColorJitter(brightness=0.3, contrast=0.3)` is applied. Adding saturation a
 
 ## 2. Architecture
 
-### 2.1 Hardcoded `fc_features=12544` in `ClassifierHead` ✓ DONE
+### 2.1 Hardcoded `fc_features=12544` in `ClassifierHead`
 `fusion_head.py` passes `12544` directly:
 ```python
 self.classifier = ClassifierHead(12544, num_classes)
@@ -68,13 +68,13 @@ FC input becomes exactly `out_ch` (256) regardless of resolution. The hardcoded 
 ### 2.3 `VNN_F` fusion head accepts only one block configuration ✓ DONE
 The fusion head is a single `VolterraBlock3D(num_ch→256, Q=2, Qc=2, stride=2)`. Q and Qc are not exposed as constructor args. If `num_ch=288` (post cross-product fusion), the internal quadratic conv is `288→2·2·256=1024` channels — relatively large. Exposing `Q` and `Qc` as `VNN_F(num_classes, num_ch, Q=2, Qc=2)` would allow ablating fusion head capacity independently of backbone capacity.
 
-### 2.4 Clamp range `[-50, 50]` potentially too wide ✓ DONE
+### 2.4 Clamp range `[-50, 50]` potentially too wide
 After BN, activations are ~O(-3, 3). The quadratic `left * right` product is ~O(9), and the cubic ~O(27). The clamp at ±50 therefore never triggers in normal operation. A tighter clamp like `[-10, 10]` would only engage in genuine instability events (gradient explosions that slip past clipping) and would provide a harder guard. Worth ablating.
 
 ### 2.5 No temporal attention before fusion ✓ DONE
 Both backbone streams pool time via `MaxPool3d(stride=2)` at each block, which gives uniform temporal weighting. A lightweight 1D temporal attention (e.g., squeeze-and-excite over the T axis before the cross-product) could let the model upweight frames where motion and appearance are most discriminative. Minimal parameter cost: `Linear(T, T)` with softmax.
 
-### 2.6 Two streams use identical architecture regardless of modality ✓ DONE
+### 2.6 Two streams use identical architecture regardless of modality
 The RGB backbone (`num_ch=3`) and flow backbone (`num_ch=2`) share the exact same Q, Qc, and channel counts. Flow is noisier, lower-dynamic-range, and has only 2 input channels. A smaller Q or reduced depth for the flow stream might generalize better and reduce total parameters. Worth ablating.
 
 ---
